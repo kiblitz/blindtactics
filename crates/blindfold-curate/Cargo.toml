@@ -1,0 +1,19 @@
+[package]
+name = "blindfold-curate"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Offline tool: turn the Lichess puzzle dump into a verified blindfold puzzle set"
+
+[dependencies]
+# `magics` is off in the wasm build to keep 694 KiB of attack tables out of the
+# bundle. Here it is pure win: this crate does nothing but run the mate search
+# millions of times.
+blindfold-core = { path = "../blindfold-core", features = ["magics"] }
+
+# Pure-Rust zstd. The dump is only ever read, never written, and this avoids a C
+# toolchain dependency on a build that already needs one for nothing else.
+ruzstd = "0.7"
+rayon = "1"

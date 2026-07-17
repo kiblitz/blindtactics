@@ -1,0 +1,5 @@
+# The database is generated data, not prose. `blindfold-curate` writes LF, so
+# checking it out as CRLF on Windows would leave the working tree byte-different from
+# what a regeneration produces — harmless for `of_jsonl`, which trims each line, but
+# it makes "did regenerating change anything?" impossible to answer by hashing.
+*.jsonl text eol=lf

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/blindfold-core",
+    "crates/blindfold-curate",
 ]
 
 [workspace.package]
@@ -39,6 +40,9 @@ opt-level = 3
 # without it `mate::search` itself stays at opt-level 0 — measured 3.5x slower on
 # every dev test run. There is no glob that covers members; each must be listed.
 [profile.dev.package.blindfold-core]
+opt-level = 3
+
+[profile.dev.package.blindfold-curate]
 opt-level = 3
 
 [profile.release]

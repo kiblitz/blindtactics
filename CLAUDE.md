@@ -61,17 +61,43 @@ These were explicitly decided by the user. Do not reopen without asking.
 ## Data source: the Lichess puzzle database
 
 - License **CC0**. Download: `https://database.lichess.org/lichess_db_puzzle.csv.zst`
-- ~6,057,356 puzzles as of 2026-07-05.
+- **6,057,357 lines** in the 2026-07-05 dump (1 header + 6,057,356 puzzles). Verified
+  two ways: python-zstandard, and our own reader in `dump.rs::the_real_dump_reads_every_line`.
 - Columns: `PuzzleId,FEN,Moves,Rating,RatingDeviation,Popularity,NbPlays,Themes,GameUrl,OpeningTags`
+- **The file is 302,111,223 bytes.** A `curl` that returns 197 KB and exits **0** is a
+  thing that happened here. Check the size, and resume with `-C -`.
 
-**CRITICAL SEMANTICS — this trips everyone up:**
+**CRITICAL SEMANTICS — two separate traps, and the second one is worse:**
 
-> The `FEN` column is the position **before** the opponent's setup move. `Moves[0]` is
-> that setup move. You apply it to the FEN, and *the resulting position* is what the
-> player sees. The solution is `Moves[1..]`.
+> **Trap 1.** The `FEN` column is the position **before** the opponent's setup move.
+> `Moves[0]` is that setup move. You apply it to the FEN, and *the resulting position*
+> is what the player sees.
+>
+> **Trap 2.** `Moves[1..]` is the **whole line, alternating** — it is *not* a list of
+> the user's moves. Only the **odd indices** are theirs. Depth is `Moves.len() / 2`,
+> not `Moves.len() - 1`.
+
+```text
+Moves:  e5f6   e8e1    g1f2     e1f1        (real mateIn2 row, 000Zo)
+        setup  SOLVER  defence  SOLVER
+        [0]    [1]     [2]      [3]
+```
+
+Trap 2 is the dangerous one because it fails *quietly*: taking `Moves[1..]` wholesale
+gives a line that is legal-looking and mostly the right length, so it produces puzzles
+rather than errors. `lichess::of_row` uses `.step_by(2)` for exactly this, and
+`tests/lichess.rs::only_every_other_move_is_the_users` pins it against real rows.
 
 So the side the user plays is the side to move **after** `Moves[0]` is applied — i.e.
 the *opposite* of the side to move in the raw FEN.
+
+**The dump is not a single zstd frame.** Byte 0 begins a 12-byte *skippable* frame;
+the real data starts at byte 12. `ruzstd::StreamingDecoder` decodes exactly one frame
+and fails on this with `SkipFrame { magic_number: 0x184D2A50 }`. `curate`'s `dump`
+module walks frames properly instead of seeking 12 bytes in, because a `seek(12)` plus
+single-frame decoder would **silently truncate** a multi-frame archive: it would report
+clean EOF at the end of frame one and curate a smaller database with no error anywhere.
+Do not "simplify" it back.
 
 **Why we cannot trust the Lichess data and must re-verify every puzzle ourselves.**
 Both of these were confirmed at source level in the `lila` / `lichess-puzzler` repos, not
@@ -96,26 +122,35 @@ one; everything else has room to filter hard.
 
 ## Architecture
 
-**Only `blindfold-core` exists today.** Everything marked `(planned)` below is
-design intent, not something you can go read. Do not cite it as though it were built.
+**`blindfold-web` does not exist yet.** Everything marked `(planned)` below is design
+intent, not something you can go read. Do not cite it as though it were built.
 
 ```
 blindfold-chess-trainer/
   crates/
     blindfold-core/      Pure logic. No WASM, no DOM, no I/O. The testable heart.
-    blindfold-curate/    (planned) Offline CLI: lichess csv.zst -> database/*.jsonl
+    blindfold-curate/    Offline CLI: lichess csv.zst -> database/*.jsonl
     blindfold-web/       (planned) Leptos CSR app. Thin. Rendering only.
-  database/              (planned) The curated puzzle subset, committed to the repo.
+  database/              The curated puzzle subset, committed to the repo.
 ```
 
 ### Current status
 
-- `blindfold-core` — built, 93 tests, clippy clean.
-- `blindfold-curate` — **not started. This is the next thing to build.**
-- `blindfold-web` — not started.
-- `database/` — **does not exist.** Nothing has been curated yet.
+- `blindfold-core` — built, 109 tests, clippy clean.
+- `blindfold-curate` — built, 18 tests + 1 `#[ignore]`d. Streams the dump, re-proves
+  every candidate, writes `database/*.jsonl`. The ignored one needs the 300 MB dump:
+  `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
+- `blindfold-web` — **not started. This is the next thing to build.**
+- `database/` — **400 puzzles, 100 per depth**, curated from the 2026-07-05 dump and
+  committed. Every one is re-proved by `crates/blindfold-curate/tests/database.rs`.
 - CI — **does not exist.** There is no `.github/`. Wherever this file says a check
   "runs in CI", read it as "is intended to, once CI exists".
+
+**`blindfold-curate` has both a lib and a bin target.** The lib is not there for
+reuse — nothing else links it — it exists so `tests/` can reach `constants`, `select`,
+and `dump`. An integration test cannot import a *binary* crate's modules, so without
+it `constants::PER_DEPTH` and the database test's idea of how many puzzles a file
+holds would be two numbers with nothing keeping them in step.
 
 **The load-bearing architectural rule:** `blindfold-core` has no dependency on `web-sys`,
 `leptos`, or any I/O. It is tested with plain native `cargo test` — instant, no browser,
