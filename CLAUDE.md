@@ -186,16 +186,26 @@ hunt over 217k positions found 79 equal-roster pairs and **zero** with different
 every pair differed only in the two clocks.
 
 Two consequences worth not re-deriving. First, `text()` was incidentally shown injective over
-217k rosters. Second — and mind the two thresholds, because conflating them is how the first
-draft of this paragraph refuted itself — shakmaty has no 50-move rule, so a line crossing
-halfmove 100 hands a real defender a **claimable** draw our solver cannot see:
+217k rosters. Second, shakmaty has no 50-move rule, so a long enough all-quiet line hands a
+real defender a **claimable** draw our solver cannot see. Two different thresholds, and this
+paragraph has now been wrong about them twice, each time by reaching for the arithmetic
+before the rule:
 
 - The **automatic** draw (halfmove 150) is genuinely unreachable. Lichess auto-draws at the
   50-move rule, so source clocks cap near 99, and a mate-in-4 is ≤7 plies: 99 + 7 = 106.
-- The **claimable** draw (halfmove 100) is *not* unreachable, by those same numbers. It needs
-  a source clock ≥93 and a line whose every ply is a quiet non-capture, since a pawn move or
-  capture zeroes the clock. Rare — but "rare" is not "impossible", and a mate the defender can
-  simply decline to lose is not a mate.
+- The **claimable** draw (halfmove 100) is reachable, from a source clock of **94** or more,
+  with every ply quiet — a pawn move or capture zeroes the clock.
+
+**Why 94 and not 93.** `93 + 7 = 100` is the tempting sum and it is the wrong one: it counts
+the clock *reaching* 100, but ply 7 is the *solver's mating move*, and mate ends the game
+(FIDE 5.1.1) while a 50-move draw must be **claimed by the player having the move** (FIDE
+9.3). The defender only has the move at plies 2, 4 and 6 — clocks `C+1`, `C+3`, `C+5` — so the
+binding ply is their last turn, not the mate. From `C = 93` the defender is on move at 94, 96,
+98 and can claim nothing, while the mate lands exactly on 100. From `C = 94` they reach 99 and
+may declare a move making it 100, which is claimable under 9.3(a). (9.3(b), where the clock is
+already at 100 on their turn, needs `C = 95`.)
+
+So: rare, not impossible — and a mate the defender can simply decline to lose is not a mate.
 
 Cheap to close: have the curation tool reject candidates whose halfmove clock is high enough
 to matter. Do it there rather than in `judge`, which must stay a pure function of the four
@@ -305,11 +315,12 @@ Prunings deliberately NOT added, with reasons:
   no test culture yet. Do this **when building the curation tool**, not before; it is the
   first thing that tool should reach for.
 - **Have the curation tool reject high-halfmove-clock candidates.** shakmaty has no 50-move
-  rule, so a line crossing halfmove 100 gives the defender a claimable draw the solver cannot
-  see. Needs a source clock ≥93 plus an all-quiet line, so it is rare rather than impossible —
-  and a mate the defender can decline to lose is not a mate. Belongs in curation, not `judge`,
-  which must stay a function of exactly what the roster carries. Free to implement; see the
-  roster-completeness section.
+  rule, so an all-quiet line from a source clock of **94+** gives the defender a claimable draw
+  the solver cannot see — rare rather than impossible, and a mate the defender can decline to
+  lose is not a mate. Rejecting on the clock alone is the cheap filter and it is what to build;
+  94 is derived in the roster-completeness section (and read the derivation before trusting the
+  number — it is not `100 - 7`). Belongs in curation, not `judge`, which must stay a function
+  of exactly what the roster carries.
 - **`search` has no frontier bound while `judge` does** (flagged at 35). Currently safe:
   `MAX_DEPTH` caps `find_linear`'s frontier well under the bound, and the doc says not to
   hand it untrusted input. Worth closing anyway, since the two functions are documented as
