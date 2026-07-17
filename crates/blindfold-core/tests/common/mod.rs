@@ -151,3 +151,27 @@ pub const CASTLING_MATE: &str = "8/8/8/8/5Q2/3k4/2R5/R3K3 w Q - 0 1";
 /// Smothered mate: the mating piece is not defended and the king is boxed in
 /// entirely by its own pieces.
 pub const SMOTHERED: &str = "6rk/6pp/8/6N1/8/8/8/6K1 w - - 0 1";
+
+/// **Black** to move. A genuine minimal mate in 3 — `Qd4+`, `Qd1+`, `gxf4#` —
+/// whose two defenses last *different lengths*.
+///
+/// This is the fixture for [`blindfold_core::mate::playback`]'s choice of defense,
+/// which is not the free choice linearity makes it look like. After `Qd4+` White
+/// has exactly two legal replies:
+///
+/// - `Kc2` — mated by the very next arrow, so only two of the three are ever shown.
+/// - `Ke2` — holds out, and the full three-arrow line is played.
+///
+/// Both are correct animations of a correct solve. Only one shows the user the
+/// puzzle they were actually asked to solve; taking the defender's first legal
+/// reply would have picked `Kc2` and quietly animated a mate-in-2.
+///
+/// Found by search, not by hand, and the search is the point: divergence turned up
+/// after examining just **11** minimal mate-in-3s, so this is ordinary rather than
+/// exotic — roughly one real mate-in-3 in ten would animate short.
+///
+/// `min_depth` is 3, so unlike a hand-picked position this one could genuinely
+/// ship as a mate-in-3 puzzle: there is no faster mate for `verify` to reject it
+/// over.
+pub const DIVERGENT_DEFENSE: &str =
+    "1n1k1br1/1b1p2n1/1qpPp3/r5pp/1pP1PP2/7B/1P1K4/RNB2r2 b - - 0 34";

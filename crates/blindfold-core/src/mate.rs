@@ -254,13 +254,20 @@ pub struct Step {
 /// Replay `line` against one concrete defense, for animating a solve.
 ///
 /// [`judge`] answers *whether* a line mates; this answers *what to show*. The UI
-/// needs a single concrete sequence to animate, but a linear line generally has
-/// many defenses and they are all equally valid — so one is chosen, by taking the
-/// defender's first legal reply at each turn.
+/// needs one concrete sequence to animate, but a linear line generally has many
+/// defenses, so one must be chosen.
 ///
-/// Which one hardly matters: by linearity, every defense ends in mate, so any
-/// choice makes a correct animation. Lives here rather than in the UI so that the
-/// playback path is testable without a browser.
+/// **The defense that holds out longest is chosen**, not the first legal one. By
+/// linearity any choice animates a *correct* line, so this looks like it should
+/// not matter — but it is not correctness, it is the reveal, which is the entire
+/// payoff of solving blind. A defense that walks into a faster mate would animate
+/// a two-move finish for a puzzle sold as mate-in-3, and the user would be left
+/// wondering what the third arrow was for. Picking the longest survivor always
+/// shows the depth advertised, and costs one [`judge`] per candidate reply on a
+/// path that runs once, when the board is already being revealed.
+///
+/// Lives here rather than in the UI so the playback path is testable without a
+/// browser.
 ///
 /// Returns `None` if `line` does not mate from `start` — callers should have
 /// consulted [`judge`] first.
@@ -272,7 +279,7 @@ pub fn playback(start: &shakmaty::Chess, line: &[arrow::Arrow]) -> Option<Vec<St
     let mut pos = start.clone();
     let mut steps = Vec::new();
 
-    for &a in line {
+    for (ply, &a) in line.iter().enumerate() {
         let mv = a
             .resolve(&pos)
             .expect("judge proved every arrow legal against every defense");
@@ -286,10 +293,7 @@ pub fn playback(start: &shakmaty::Chess, line: &[arrow::Arrow]) -> Option<Vec<St
             return Some(steps); // Trailing arrows are never played.
         }
 
-        let reply = *pos
-            .legal_moves()
-            .first()
-            .expect("not mate, so a reply exists");
+        let reply = longest_defense(&pos, &line[ply + 1..]);
         pos.play_unchecked(reply);
         steps.push(Step {
             played: reply,
@@ -298,6 +302,33 @@ pub fn playback(start: &shakmaty::Chess, line: &[arrow::Arrow]) -> Option<Vec<St
     }
 
     unreachable!("a mating line reaches checkmate before running out of arrows")
+}
+
+/// The defender's reply that puts off mate the longest, given the solver will play
+/// `rest`.
+///
+/// [`Verdict::Mates`]'s `moves` is already the *maximum* over all defenses, which
+/// is exactly the question here — so this reuses [`judge`] rather than growing a
+/// second search that would have to be kept in step with it.
+///
+/// `pos` must not be mate and `rest` must mate from every reply; both hold because
+/// [`playback`] checks for mate first and only runs on a line [`judge`] accepted.
+fn longest_defense(pos: &shakmaty::Chess, rest: &[arrow::Arrow]) -> shakmaty::Move {
+    pos.legal_moves()
+        .into_iter()
+        .max_by_key(|reply| {
+            let mut child = pos.clone();
+            child.play_unchecked(*reply);
+            match judge(&child, rest) {
+                Verdict::Mates { moves } => moves,
+                // Unreachable on a judged line: linearity means every defense is
+                // mated by `rest`. Scoring 0 rather than panicking keeps a reveal
+                // from taking the page down if that ever stops being true — the
+                // animation would just pick a different, still-legal defense.
+                Verdict::Refuted { .. } | Verdict::TooComplex { .. } => 0,
+            }
+        })
+        .expect("not mate, so a reply exists")
 }
 
 /// Search for a linear mating line of **at most** `max_depth` solver moves.

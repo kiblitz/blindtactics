@@ -362,6 +362,55 @@ fn playback_refuses_a_line_that_does_not_mate() {
     assert_eq!(mate::playback(&pos, &common::line("a1a7")), None);
 }
 
+/// The reveal must show the puzzle the user was asked to solve.
+///
+/// By linearity every defense ends in mate, so *any* of them animates a correct
+/// line and this looks like a free choice. It is not. In
+/// [`common::DIVERGENT_DEFENSE`] one defense (`Kc2`) is mated an arrow early, so
+/// choosing it animates a two-move finish for a mate-in-3 — a correct line, and
+/// the wrong puzzle. The user, who solved it blind, is shown a board that never
+/// needed their third arrow.
+///
+/// This fails against `legal_moves().first()`, which picks `Kc2`.
+#[test]
+fn playback_shows_the_full_depth_the_puzzle_advertises() {
+    let pos = common::pos(common::DIVERGENT_DEFENSE);
+    let line = common::line("b6d4 d4d1 g5f4");
+
+    // The fixture's premise: a real, minimal mate in 3.
+    assert_eq!(mate::judge(&pos, &line), mate::Verdict::Mates { moves: 3 });
+    assert_eq!(mate::min_depth(&pos, 4), Some(3), "no shorter mate exists");
+
+    let steps = mate::playback(&pos, &line).expect("mates");
+    let solver_moves = steps.len().div_ceil(2);
+    assert_eq!(
+        solver_moves,
+        line.len(),
+        "playback must animate all {} arrows, not stop at a defense that dies early",
+        line.len()
+    );
+    assert!(steps.last().expect("non-empty").after.is_checkmate());
+}
+
+/// The defense `playback` picks has to be one the defender could really have
+/// played — choosing the longest survivor must not smuggle in an illegal move.
+#[test]
+fn playback_picks_a_legal_defense() {
+    let pos = common::pos(common::DIVERGENT_DEFENSE);
+    let steps = mate::playback(&pos, &common::line("b6d4 d4d1 g5f4")).expect("mates");
+
+    let mut replay = pos.clone();
+    for step in &steps {
+        assert!(
+            replay.legal_moves().contains(&step.played),
+            "{} is not legal in the position it was played from",
+            step.played
+        );
+        replay.play_unchecked(step.played);
+        assert_eq!(replay, step.after, "Step::after must follow Step::played");
+    }
+}
+
 /// Whatever `playback` shows must be a real game: every move legal, ending mated.
 #[test]
 fn playback_produces_a_legal_game() {
