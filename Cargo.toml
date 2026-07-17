@@ -24,25 +24,21 @@ shakmaty = { version = "0.30", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
-anyhow = "1"
-
-# Curation-only. Never reachable from the wasm build.
-csv = "1.4"
-zstd = "0.13"
-rayon = "1.12"
-clap = { version = "4", features = ["derive"] }
-ureq = "2"
-
-# Internal crates.
-blindfold-core = { path = "crates/blindfold-core" }
 
 [profile.dev]
 opt-level = 0
 debug = true
 
-# The curation tool walks millions of puzzles; an unoptimized mate search is
-# unusably slow. This makes `cargo test` in dev bearable too.
+# Dependencies at full optimization: shakmaty's movegen is the inner loop of the
+# mate search, and an unoptimized one makes `cargo test` unpleasant.
 [profile.dev.package."*"]
+opt-level = 3
+
+# And the crates that actually run that search. This line is not redundant:
+# cargo's `"*"` above matches DEPENDENCIES ONLY, never workspace members, so
+# without it `mate::search` itself stays at opt-level 0 — measured 3.5x slower on
+# every dev test run. There is no glob that covers members; each must be listed.
+[profile.dev.package.blindfold-core]
 opt-level = 3
 
 [profile.release]

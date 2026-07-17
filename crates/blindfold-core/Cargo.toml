@@ -19,6 +19,3 @@ default = []
 # speed, so the native curation tool turns it on; the wasm build leaves it off to
 # keep the bundle small. Purely a speed/size trade — results are identical.
 magics = ["shakmaty/magics"]
-
-[dev-dependencies]
-serde_json.workspace = true
