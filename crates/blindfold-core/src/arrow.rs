@@ -27,8 +27,8 @@
 //! travel, which is what a drag produces) and `e1h1` (the king-takes-rook form
 //! shakmaty stores internally), but `of_move` can only return one, and returns
 //! `e1g1`. So `e1h1` survives the round trip as `e1g1`. This is canonicalization,
-//! not drift — both spell the same `Move::Castle` — and `search` depends on it to
-//! avoid offering the same castle twice.
+//! not drift: both spell the same `Move::Castle`, and `e1g1` is the one a drag
+//! actually produces.
 
 use crate::constants;
 use std::fmt;

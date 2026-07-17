@@ -71,23 +71,31 @@ pub const MAX_LINE: usize = 8;
 /// `1 << 18` measures at **97 MB** peak working set (`examples/frontier_memory.rs`,
 /// on the `UNBOUNDED_FRONTIER` fixture) against a 40 MB flat frontier.
 ///
-/// It cannot reject a legitimate puzzle or solve, and the reason is structural, not
-/// a matter of headroom. Measured frontier by ply on that fixture — which is built
-/// so no defense *ever* refutes, the worst case there is — runs
-/// `[30, 926, 29203, 933297, 30105423]`. The bound is first reachable at ply 4, so
-/// it takes a line of **five or more arrows** to trip. [`MAX_DEPTH`] caps a
-/// solution at four. A legitimate line therefore never gets past the ply-3 column,
-/// where the worst case is ~29k — 9x clear of the bound.
+/// Why it does not reject legitimate work. Two arguments, and it matters which is
+/// which — an earlier version of this doc ran them together and overclaimed.
 ///
-/// Trying to beat that on purpose is self-defeating: sustaining ~30x per ply needs
-/// black's spare pieces to be long-range, and long-range is exactly what lets them
-/// capture the mating piece or interpose. The one shape immune to it (black
-/// light-squared bishops against an all-dark mating line) peaks at ~52k with absurd
-/// material, still 5x under. So the bound only ever fires on input that was never
-/// going to mate, and there, giving up sooner is strictly better.
+/// **Proven.** Only three plies of a solution ever generate a frontier. The last
+/// arrow is `is_last`, so `judge` returns without pushing; with [`MAX_DEPTH`] = 4
+/// that leaves three advancing plies. Measured growth on `UNBOUNDED_FRONTIER` (no
+/// defense ever refutes it, so nothing prunes) is `[30, 926, 29203, 933297, ...]`,
+/// ~32x per ply. The bound therefore cannot be reached by a four-arrow line at the
+/// plies that blow up; it takes **five or more arrows**, which no solution has.
 ///
-/// Curation and the app are to share this constant rather than pick their own —
-/// neither exists yet, so this is intent — because that is what keeps them
-/// agreeing: a puzzle the curation tool could only verify by exceeding this bound
-/// is one the browser could not verify either, so it must not reach the database.
+/// **Empirical.** What remains is the third column, and that is a measurement, not
+/// a theorem. Sweeping the one shape immune to the usual self-correction — black
+/// light-squared bishops against an all-dark mating line, so they can never capture
+/// the mating piece or interpose — the widest third-ply frontier found is **63,308**
+/// (8 bishops, absurd material), about **4x** clear of the bound. That is the worst
+/// *constructed*, not the worst *possible*. Sustaining ~30x per ply normally needs
+/// long-range defenders, and long-range is exactly what lets them refute the line
+/// and collapse the frontier, which is why this is hard to push higher.
+///
+/// **And if the empirical part is ever wrong, nothing breaks.** Exceeding the bound
+/// yields [`crate::mate::Verdict::TooComplex`], which is not a refutation — the user
+/// is never told they were wrong. Curation calls the same `judge` under the same
+/// constant, and `verify` demands `Mates`, so a puzzle that trips this bound fails
+/// verification and never reaches the database. The app is therefore never asked to
+/// judge one. That shared constant is the whole safety property, and it is why both
+/// crates must read it from here rather than pick their own. (Neither exists yet;
+/// this is the intent they are to be built to.)
 pub const MAX_FRONTIER: usize = 1 << 18;

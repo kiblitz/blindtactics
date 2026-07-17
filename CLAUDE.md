@@ -110,7 +110,7 @@ blindfold-chess-trainer/
 
 ### Current status
 
-- `blindfold-core` — built, 78 tests, clippy clean.
+- `blindfold-core` — built, 92 tests, clippy clean.
 - `blindfold-curate` — **not started. This is the next thing to build.**
 - `blindfold-web` — not started.
 - `database/` — **does not exist.** Nothing has been curated yet.
@@ -134,11 +134,13 @@ disagree about what "solved" means); and it insulates us from frontend framework
 - `mate` — `judge` (does this line mate against every defense?), `playback` (what the UI
   animates on a solve), and `find_linear` / `min_depth` (search). The heart of the project.
 - `roster` — piece locations as **structured data** (`roster::Entry { role, squares }`),
-  ordered K/Q/R/B/N/P. Renders to text, to SVG, and later to speech. Never a string.
+  ordered K/Q/R/B/N/P, **plus castling rights and the en-passant square**. Renders to text,
+  to SVG, and later to speech. Never a string.
 - `puzzle` — the `Puzzle` model, JSONL load/save, and `verify()`.
-- `position` — FEN -> legal position. Its own module because parsing a FEN has nothing to
+- `position` — FEN <-> legal position. Its own module because parsing a FEN has nothing to
   do with puzzles, and the curation tool must parse the *raw Lichess* FEN, which is
-  explicitly not a puzzle FEN.
+  explicitly not a puzzle FEN. `to_fen` commits to `EnPassantMode::Legal` so the stored FEN
+  carries exactly the state `roster` announces.
 - `constants` — named constants. Per the global rule, they live here rather than inline.
 
 There is deliberately **no `attempt` module**. Validating a submission is exactly
@@ -148,6 +150,25 @@ wrapper would only add a layer that could drift.
 Text rendering lives in `roster` (core) rather than the web crate because two consumers
 share it — plain text and, later, speech. SVG rendering belongs to the web crate, which is
 its only consumer. That is the line; it is not "no strings in core".
+
+### The roster must carry everything that decides the answer
+
+Not a detail — the property the product rests on. The user cannot look at the board, so
+anything the roster omits is not a presentational gap: it makes the puzzle **unsolvable**
+and then marks a correct answer wrong.
+
+This was caught late, and the way it hid is worth remembering. `Roster` was placement plus
+`to_move`, which drops **castling rights** and the **en-passant square** — and both decide a
+mate in our own fixtures. `EN_PASSANT_MATE` and the same position without the ep square
+rendered *byte-identical* rosters and had different answers. The tests did not catch it
+because `mate_edge_cases.rs` builds those two fixtures to prove the *solver* handles
+castling and en passant, while `tests/roster.rs` never touched either: the solver's reach
+and the roster's reach were each tested thoroughly, and never against each other.
+`roster_distinguishes_positions_whose_answers_differ` is what holds this now.
+
+En passant is read with `EnPassantMode::Legal`, so a square nobody can capture on is not
+announced. Sound because ep rights expire after one ply — a square with no legal capture
+now can never matter later.
 
 ### Why arrows, not `shakmaty::Move`s
 
@@ -212,14 +233,17 @@ measured, not guessed:
   measured at 97 MB by `examples/frontier_memory.rs` — rerun that and update the constant's
   doc if you touch the bound, `Branch`, or the frontier advance. Headroom here is free; wasm
   linear memory never shrinks back, so overshoot is not.
-- **`1 << 18` cannot reject a legitimate puzzle, and the reason is structural — do not
-  "restore" it on a hunch.** Frontier by ply on `UNBOUNDED_FRONTIER` (the worst case, built
-  so no defense ever refutes) is `[30, 926, 29203, 933297, 30105423]`. The bound is first
-  reachable at ply 4, i.e. by a line of **5+ arrows**; `MAX_DEPTH` caps a solution at 4, so
-  a real line never passes the ply-3 column (~29k, 9x clear). Beating that on purpose is
-  self-defeating: ~30x/ply needs long-range black pieces, and long-range is what lets them
-  capture the mater or interpose. The immune shape (black light-squared bishops vs an
-  all-dark mating line) peaks at ~52k on absurd material.
+- **`1 << 18` does not reject legitimate work — do not "restore" it on a hunch.** Keep the
+  two halves of the argument apart; an earlier draft ran them together and overclaimed.
+  *Proven:* only three plies of a solution generate a frontier (the last arrow is `is_last`
+  and pushes nothing; `MAX_DEPTH` is 4), and growth on `UNBOUNDED_FRONTIER` is
+  `[30, 926, 29203, 933297, ...]`, so tripping the bound needs **5+ arrows** and no solution
+  has them. *Empirical:* the third column's worst case is a measurement — sweeping the
+  immune shape (black light-squared bishops vs an all-dark mating line) gives **63,308**,
+  about 4x clear. *And it fails safe either way:* exceeding the bound is `TooComplex`, not
+  `Refuted`, so no user is told they were wrong; `verify` demands `Mates`, so such a puzzle
+  never reaches the database, so the app is never asked to judge one. That only holds while
+  curation and the app read the **same** constant.
 
 Prunings deliberately NOT added, with reasons:
 
@@ -242,6 +266,17 @@ Prunings deliberately NOT added, with reasons:
   today that is held by `search_and_judge_agree` sampling rather than by construction. The
   suggested fix is to extract the advance generic over a `Trail` trait (`()` for search,
   `Vec<Arrow>` for judge, monomorphized away). Deferred, not rejected.
+- **Put the Lichess row -> `Puzzle` conversion in core, not in `blindfold-curate`** (flagged
+  at 55). CLAUDE.md calls the `FEN`-is-before-`Moves[0]` semantics the project's worst
+  footgun, and the rule here is "anything that can live in core, must". That conversion is
+  pure logic with no I/O, so on both counts it belongs in a `lichess` module in core, tested
+  by the fast native suite — rather than hand-rolled at the call site in the one crate with
+  no test culture yet. Do this **when building the curation tool**, not before; it is the
+  first thing that tool should reach for.
+- **`search` has no frontier bound while `judge` does** (flagged at 35). Currently safe:
+  `MAX_DEPTH` caps `find_linear`'s frontier well under the bound, and the doc says not to
+  hand it untrusted input. Worth closing anyway, since the two functions are documented as
+  needing to agree and this asymmetry is guarded by a comment rather than by code.
 
 ## Testing
 
