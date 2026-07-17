@@ -145,10 +145,11 @@ struct Branch {
 
 /// Play `line` out against every legal defense from `start`.
 ///
-/// `start` must have the solver to move. This is the function that decides
-/// whether a submitted attempt is correct, and it is the same one the curation
-/// tool uses to decide whether a puzzle is admissible — so the database and the
-/// app can never disagree about what "solved" means.
+/// `start` must have the solver to move. This is the function that decides whether
+/// a submitted attempt is correct, and it is meant to be the same one the curation
+/// tool calls to decide whether a puzzle is admissible — so that the database and
+/// the app cannot disagree about what "solved" means. (The curation tool does not
+/// exist yet; that is the intent it will be built to, not a property held today.)
 ///
 /// Bounded: see [`Verdict::TooComplex`]. Nothing caps how many arrows a user may
 /// draw, and the frontier grows ~30x per ply, so an unbounded judge is an

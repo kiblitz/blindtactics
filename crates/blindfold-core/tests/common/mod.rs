@@ -54,8 +54,9 @@ pub const BRANCHING_LINEAR: &str = "7k/p1p5/5K2/8/8/8/8/1R6 w - - 0 1";
 ///
 /// The same shape as [`BRANCHING_LINEAR`], but Black's a7 pawn is now a rook, so
 /// it can reach the b-file. (The c7 pawn goes too — it only ever existed to pad
-/// out the defense count over there.) Now `Kg6` `Rb8#` is NOT linear: Black answers `Rb7`, which blocks
-/// the file and makes the second arrow flatly illegal.
+/// out the defense count over there.) Now `Kg6` `Rb8#` is NOT linear: Black
+/// answers `Rb7`, which blocks the file and makes the second arrow flatly
+/// illegal.
 ///
 /// This is the most important negative test in the project. Against the *king
 /// move* `Kg8` the line mates perfectly — see the test

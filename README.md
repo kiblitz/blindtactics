@@ -40,9 +40,9 @@ trainer wants.
 | `database/` | *(planned)* The curated puzzle subset, committed. |
 
 `blindfold-core` depends on no UI and no I/O, so its whole test suite runs under plain
-`cargo test` with no browser or wasm toolchain. It is shared by the curation tool and the
-app, which is what stops the database and the live app from ever disagreeing about what
-"solved" means.
+`cargo test` with no browser or wasm toolchain. It is meant to be shared by the curation
+tool and the app once those exist, so that the database and the live app cannot disagree
+about what "solved" means.
 
 ## Build
 

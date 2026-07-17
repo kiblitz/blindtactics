@@ -3,8 +3,9 @@
 //! This is a *category* module, not a concept module, and it is that way on
 //! purpose. Nothing in here is shared between modules — `MAX_LINE` and
 //! `MAX_FRONTIER` belong to `mate`, `MAX_DEPTH` to `puzzle`, `PROMOTABLE` to
-//! `arrow` — so grouping them by "is a constant" rather than by what they are
-//! about cuts against how the rest of the crate is organised. It is done anyway
+//! `arrow`, `ANNOUNCE_ORDER` to `roster`; all five, and there is no sixth — so
+//! grouping them by "is a constant" rather than by what they are about cuts
+//! against how the rest of the crate is organised. It is done anyway
 //! because the project's standing rule is that constants live in a dedicated
 //! constants module, and a rule followed unevenly is worse than either choice
 //! made consistently: the moment some constants live here and others live next to
@@ -55,8 +56,38 @@ pub const MAX_LINE: usize = 8;
 
 /// Ceiling on live defenses tracked while judging a line.
 ///
-/// A branch is a `(Chess, Vec<Arrow>)`, measured at 160 bytes plus the `Vec`'s
-/// heap. An unrefuted line reaches ~30M of them — over 4.8 GiB, past wasm32's
-/// whole 4 GB address space — within about six seconds. This cap puts the ceiling
-/// near 170 MB, about the most a browser heap should be asked to absorb.
-pub const MAX_FRONTIER: usize = 1 << 20;
+/// Without a cap this is unbounded: an unrefuted line reaches ~30M branches, over
+/// 4.8 GiB, within about six seconds — past wasm32's entire 4 GB address space.
+///
+/// Sizing it is not `MAX_FRONTIER * size_of::<Branch>()`, which is the error this
+/// comment made twice before anyone measured it. A branch is 160 bytes flat plus a
+/// small `defense` allocation, but `judge` also holds the *old* frontier while
+/// pushing the new one into a `Vec` that doubles as it grows, so real peak runs
+/// well over twice the flat size. `1 << 20` computed to "about 150 MB" on paper and
+/// cost **527 MB** in practice. On wasm that is worse than it sounds: linear memory
+/// never shrinks back, so one pathological submission would hold half a gigabyte
+/// for the rest of the session.
+///
+/// `1 << 18` measures at **97 MB** peak working set (`examples/frontier_memory.rs`,
+/// on the `UNBOUNDED_FRONTIER` fixture) against a 40 MB flat frontier.
+///
+/// It cannot reject a legitimate puzzle or solve, and the reason is structural, not
+/// a matter of headroom. Measured frontier by ply on that fixture — which is built
+/// so no defense *ever* refutes, the worst case there is — runs
+/// `[30, 926, 29203, 933297, 30105423]`. The bound is first reachable at ply 4, so
+/// it takes a line of **five or more arrows** to trip. [`MAX_DEPTH`] caps a
+/// solution at four. A legitimate line therefore never gets past the ply-3 column,
+/// where the worst case is ~29k — 9x clear of the bound.
+///
+/// Trying to beat that on purpose is self-defeating: sustaining ~30x per ply needs
+/// black's spare pieces to be long-range, and long-range is exactly what lets them
+/// capture the mating piece or interpose. The one shape immune to it (black
+/// light-squared bishops against an all-dark mating line) peaks at ~52k with absurd
+/// material, still 5x under. So the bound only ever fires on input that was never
+/// going to mate, and there, giving up sooner is strictly better.
+///
+/// Curation and the app are to share this constant rather than pick their own —
+/// neither exists yet, so this is intent — because that is what keeps them
+/// agreeing: a puzzle the curation tool could only verify by exceeding this bound
+/// is one the browser could not verify either, so it must not reach the database.
+pub const MAX_FRONTIER: usize = 1 << 18;

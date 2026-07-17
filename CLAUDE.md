@@ -122,9 +122,9 @@ blindfold-chess-trainer/
 no toolchain. Anything that can live in core, must. The web crate should contain almost
 no logic worth testing.
 
-This matters three ways: the test suite stays fast; the same solver is shared by the
-offline curation tool and the live app (so the DB and the app can never disagree about
-what "solved" means); and it insulates us from frontend framework churn.
+This matters three ways: the test suite stays fast; the same solver is to be shared by the
+offline curation tool and the live app, once they exist (so that the DB and the app cannot
+disagree about what "solved" means); and it insulates us from frontend framework churn.
 
 ### `blindfold-core` modules
 
@@ -205,6 +205,21 @@ measured, not guessed:
   JSON.
 - An unrefuted line reaches ~30M branches (~5 GiB) in about six seconds, past wasm32's
   4 GB address space. Hence `constants::MAX_FRONTIER` and `Verdict::TooComplex`.
+- **Do not size `MAX_FRONTIER` by `bound * size_of::<Branch>()`.** That product has been
+  wrong twice, both times in this file's favour. `judge` keeps the old frontier alive while
+  the new one doubles its way up, so the true peak is well over twice the flat figure: the
+  old `1 << 20` penciled out to ~150 MB and measured **527 MB**. It is now `1 << 18`,
+  measured at 97 MB by `examples/frontier_memory.rs` — rerun that and update the constant's
+  doc if you touch the bound, `Branch`, or the frontier advance. Headroom here is free; wasm
+  linear memory never shrinks back, so overshoot is not.
+- **`1 << 18` cannot reject a legitimate puzzle, and the reason is structural — do not
+  "restore" it on a hunch.** Frontier by ply on `UNBOUNDED_FRONTIER` (the worst case, built
+  so no defense ever refutes) is `[30, 926, 29203, 933297, 30105423]`. The bound is first
+  reachable at ply 4, i.e. by a line of **5+ arrows**; `MAX_DEPTH` caps a solution at 4, so
+  a real line never passes the ply-3 column (~29k, 9x clear). Beating that on purpose is
+  self-defeating: ~30x/ply needs long-range black pieces, and long-range is what lets them
+  capture the mater or interpose. The immune shape (black light-squared bishops vs an
+  all-dark mating line) peaks at ~52k on absurd material.
 
 Prunings deliberately NOT added, with reasons:
 
@@ -244,7 +259,8 @@ is what makes iterating on the UI safe.
 
 The two fixtures that matter most are `BRANCHING_LINEAR` and `BRANCHING_BLOCKED`: the same
 shape, with Black's a7 pawn swapped for a rook and the c7 pawn dropped. The first is linear
-despite five defenses; the second is not, because Black can interpose. Together they are what "linear" does and does not mean.
+despite five defenses; the second is not, because Black can interpose. Together they are
+what "linear" does and does not mean.
 
 Traps already encoded as tests (do not regress these):
 
