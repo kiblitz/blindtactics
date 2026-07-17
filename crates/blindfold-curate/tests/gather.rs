@@ -14,8 +14,8 @@
 use blindfold_curate::constants;
 use blindfold_curate::gather;
 
-/// Real `mateIn2`. 17 squares raw, 16 after the setup move — over the roster gate
-/// either way.
+/// Real `mateIn2`. 17 squares raw, 16 after the setup move — well over the roster
+/// gate either way.
 const HEAVY_MATE_IN_2: &str = "000Zo,4r3/1k6/pp3r2/1b2P2p/3R1p2/P1R2P2/1P4PP/6K1 w - - 0 35,e5f6 e8e1 g1f2 e1f1,1363,75,93,120,endgame mate mateIn2 operaMate short";
 
 /// Real `mateIn1`, 6 squares — a rook endgame, the shape this trainer wants.
@@ -24,10 +24,10 @@ const LIGHT_MATE_IN_1: &str = "00C7m,8/5k2/1P4R1/6PK/1r6/8/8/8 w - - 1 58,h5h6 b
 /// Real `mateIn1`, 4 squares — the sparsest shape in the dump.
 const SPARSE_MATE_IN_1: &str = "00T85,8/8/8/8/8/4K3/1k3Q2/1q6 b - - 5 53,b2c1 f2d2,1039,92,93,1528,endgame master mate mateIn1 oneMove queenEndgame";
 
-/// Real `mateIn1` whose setup move `f6h8` is a **capture**: 15 squares in the row's
-/// FEN, 14 in the position the user is actually shown. Sits astride the gate, so it
+/// Real `mateIn1` whose setup move `b6b5` is a **capture**: 11 squares in the row's
+/// FEN, 10 in the position the user is actually shown. Sits astride the gate, so it
 /// is kept only by a gate that measures after the setup move.
-const CAPTURE_SETUP_MATE_IN_1: &str = "00AfZ,2r3kR/Q7/5q2/1brpN3/5Pp1/4P1P1/6K1/1B6 b - - 2 43,f6h8 a7f7,978,76,100,536,master mate mateIn1 middlegame oneMove";
+const CAPTURE_SETUP_MATE_IN_1: &str = "00EWi,8/8/1R3pkp/1pP5/1P3PKP/r7/8/8 w - - 2 48,b6b5 f6f5,886,82,94,480,endgame mate mateIn1 oneMove rookEndgame";
 
 fn pool_of(rows: &[&str]) -> gather::Pool {
     let text = rows.join("\n");
@@ -80,14 +80,14 @@ fn light_rows_become_candidates() {
 fn the_roster_gate_measures_the_position_after_the_setup_move() {
     assert_eq!(
         constants::MAX_ROSTER_SQUARES,
-        14,
-        "this fixture straddles a gate of 14 (15 raw, 14 shown); re-pick it if the \
+        10,
+        "this fixture straddles a gate of 10 (11 raw, 10 shown); re-pick it if the \
          gate moves"
     );
     let pool = pool_of(&[CAPTURE_SETUP_MATE_IN_1]);
     assert_eq!(
         ids(&pool, 1),
-        ["00AfZ"],
+        ["00EWi"],
         "the setup move captures, bringing the roster the user sees down to the gate"
     );
 }
@@ -172,13 +172,76 @@ fn every_row_is_counted_as_scanned() {
     assert_eq!(pool.scanned, 3);
 }
 
-/// `is_full` drives the early break, so a wrong answer either stops the scan before the
-/// buckets are full or reads all 6M rows for nothing.
+/// Build a pool holding `counts[i]` candidates at depth `i + 1`.
+///
+/// Direct rather than through `of_rows`, because the interesting states need
+/// `CANDIDATES_PER_DEPTH` (6,000) candidates per depth and no fixture is going to
+/// carry 24,000 rows. The first version of these tests used a pool of *one* candidate
+/// and asserted only `!is_full` — which is true of any implementation that ever
+/// returns false, including one whose body is `false`. It passed against a deleted
+/// function, an `all`->`any` flip, and a bare `break`.
+fn pool_with(counts: [usize; constants::DEPTHS.len()]) -> gather::Pool {
+    let template = gather::of_rows(std::io::BufReader::new(SPARSE_MATE_IN_1.as_bytes()), |_| {})
+        .expect("read")
+        .by_depth
+        .remove(&1)
+        .expect("one candidate")
+        .remove(0);
+
+    let mut pool = gather::Pool::default();
+    for (i, count) in counts.iter().enumerate() {
+        pool.by_depth
+            .insert(constants::DEPTHS[i], vec![template.clone(); *count]);
+    }
+    pool
+}
+
+/// `is_full` drives the early break: it decides whether the scan stops or reads on.
 #[test]
-fn a_pool_is_not_full_until_every_depth_is() {
-    let pool = pool_of(&[LIGHT_MATE_IN_1]);
+fn a_pool_is_full_only_when_every_depth_has_its_candidates() {
+    let n = constants::CANDIDATES_PER_DEPTH;
+    assert!(pool_with([n, n, n, n]).is_full());
+}
+
+/// The `all` vs `any` distinction, which is the one that matters and the one nothing
+/// used to check. The abundant tiers fill first and the scarce ones need the rest of
+/// the file, so a pool with three depths full and one short is *not* full — an `any`
+/// would stop the scan here and under-gather mate-in-4 silently.
+#[test]
+fn one_depth_short_of_full_is_not_a_full_pool() {
+    let n = constants::CANDIDATES_PER_DEPTH;
     assert!(
-        !gather::is_full(&pool),
-        "one candidate at one depth is not a full pool"
+        !pool_with([n, n, n, n - 1]).is_full(),
+        "mate-in-4 one candidate short must keep the scan going"
     );
+    assert!(
+        !pool_with([n, 0, 0, 0]).is_full(),
+        "only the first tier full"
+    );
+    assert!(
+        !pool_with([0, 0, 0, 0]).is_full(),
+        "an empty pool is not full"
+    );
+}
+
+/// `candidates` is what `is_full` and the progress line both read.
+#[test]
+fn candidates_counts_what_a_depth_holds() {
+    let pool = pool_with([3, 0, 1, 0]);
+    assert_eq!(pool.candidates(1), 3);
+    assert_eq!(pool.candidates(2), 0);
+    assert_eq!(pool.candidates(3), 1);
+}
+
+/// `total` is the operator's headline number, so a dropped term would mean a
+/// rejection reason that never appears in the summary.
+#[test]
+fn total_counts_every_rejection_reason() {
+    let rejected = gather::Rejected {
+        malformed: 1,
+        mislabelled: 2,
+        too_heavy: 4,
+        drawish: 8,
+    };
+    assert_eq!(rejected.total(), 15, "every field must be summed");
 }

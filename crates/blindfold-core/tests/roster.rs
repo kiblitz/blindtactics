@@ -242,7 +242,7 @@ fn both_kings_are_always_present() {
 /// roster *entries*.
 #[test]
 fn squares_counts_every_occupied_square() {
-    // Two kings and one rook.
+    // Two kings, a rook, and three pawns.
     assert_eq!(
         roster::of(&common::pos(common::BACK_RANK_BLACK)).squares(),
         2 + 1 + 3
@@ -264,7 +264,7 @@ fn squares_counts_every_occupied_square() {
 
 /// The trap a naive implementation falls into: one `Entry` can hold many squares, so
 /// counting entries counts *roles*. `UNBOUNDED_FRONTIER` has four black bishops in a
-/// single entry — 5 entries but 7 squares.
+/// single entry — 4 entries but 7 squares.
 #[test]
 fn squares_counts_squares_not_roster_entries() {
     let r = roster::of(&common::pos(common::UNBOUNDED_FRONTIER));

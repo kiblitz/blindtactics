@@ -236,11 +236,12 @@ fn rejects_a_short_row() {
 /// out-of-bounds index rather than return `Error::Columns`.
 #[test]
 fn rejects_a_row_one_column_short_rather_than_panicking() {
-    let one_short: String = std::iter::repeat_n("x", constants::LICHESS_MIN_COLUMNS - 1)
-        .collect::<Vec<_>>()
-        .join(",");
+    // Spelled out rather than built from `LICHESS_MIN_COLUMNS`: a fixture derived
+    // from the constant under test moves with it, and would pass however wrong the
+    // constant was.
+    let one_short = "a,b,c,d,e,f,g";
     assert!(matches!(
-        lichess::Row::of_csv(&one_short),
+        lichess::Row::of_csv(one_short),
         Err(lichess::Error::Columns { .. })
     ));
 }

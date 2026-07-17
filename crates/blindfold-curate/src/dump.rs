@@ -9,14 +9,11 @@
 //! The tempting fix is to seek past that first frame — the real data does start at
 //! byte 12 — and carry on. **That silently discards 97% of the dump.**
 //!
-//! The file is `pzstd` output: **34 data frames, each preceded by its own 4-byte
-//! skippable frame** whose payload is the compressed size of the frame that follows.
-//! Frame 1 holds 32 MiB — 182,109 rows of 6,057,357. So a seek-and-decode-one-frame
-//! reader reports a clean EOF after 3.01% of the file, with no error anywhere.
-//!
-//! And it would not even look broken: `gather` stops once every depth has enough
-//! candidates, which happens at ~83k rows — well inside that first frame. The tool
-//! would exit 0 and write a full-looking database curated from 3% of the dump.
+//! The file is `pzstd` output: **34 data frames, each preceded by its own 12-byte
+//! skippable frame** (4 magic, 4 length, a 4-byte payload) whose payload is the
+//! compressed size of the frame that follows. Frame 1 holds 32 MiB — 182,109 rows of
+//! 6,057,357. So a seek-and-decode-one-frame reader reports a clean EOF after 3.01%
+//! of the file, with no error anywhere.
 //!
 //! So this walks frames properly: skip the skippable ones, decode each data frame in
 //! turn, and stop only at real end-of-file. All of the above is measured, not
@@ -244,9 +241,8 @@ mod tests {
     }
 
     /// The reason this module is not `seek(12)`. The real dump is 34 data frames, so
-    /// a single-frame decoder reports a clean EOF after 3% of the rows — and `gather`
-    /// fills its buckets inside that 3%, so the tool would exit 0 with a full-looking
-    /// database built from a fraction of the file.
+    /// a single-frame decoder reports a clean EOF after 3% of the rows, having
+    /// silently dropped the other 97%.
     #[test]
     fn every_data_frame_is_read_not_just_the_first() {
         let mut bytes = data_frame(b"first\n");

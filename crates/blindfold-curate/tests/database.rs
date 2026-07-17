@@ -116,7 +116,7 @@ fn each_depth_spans_a_range_of_ratings() {
             *ratings.iter().max().expect("non-empty"),
         );
         assert!(
-            hi - lo > constants::MIN_RATING_SPAN,
+            hi - lo >= constants::MIN_RATING_SPAN,
             "mate_in_{depth}: ratings span only {lo}-{hi}"
         );
     }

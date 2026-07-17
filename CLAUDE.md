@@ -58,8 +58,8 @@ These were explicitly decided by the user. Do not reopen without asking.
 - **Audio is designed-for, not built yet.** The roster is modeled as structured data,
   never a display string, so text / SVG / speech all render from one source.
 - **Curation gates on roster size, not just chess validity.** A puzzle is only usable
-  if a human can hold the position in their head. `MAX_ROSTER_SQUARES = 14`; see
-  "The roster gate" below for why 14 and not 10.
+  if a human can hold the position in their head. `MAX_ROSTER_SQUARES = 10`; see
+  "The roster gate" below, and do not raise it without re-running the numbers.
 
 ## Data source: the Lichess puzzle database
 
@@ -140,13 +140,13 @@ blindfold-chess-trainer/
 ### Current status
 
 - `blindfold-core` — built, 115 tests, clippy clean.
-- `blindfold-curate` — built, 34 tests + 1 `#[ignore]`d. Streams the dump, gates on
+- `blindfold-curate` — built, 37 tests + 1 `#[ignore]`d. Streams the dump, gates on
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
 - `blindfold-web` — **not started. This is the next thing to build.**
 - `database/` — **400 puzzles, 100 per depth**, curated from the 2026-07-05 dump and
-  committed. Rosters run 4-14 squares, median 12-13. Every one is re-proved by
+  committed. Rosters run 4-10 squares, median 9. Every one is re-proved by
   `crates/blindfold-curate/tests/database.rs`.
 - CI — **does not exist.** There is no `.github/`. Wherever this file says a check
   "runs in CI", read it as "is intended to, once CI exists".
@@ -225,12 +225,27 @@ board; it is uncorrelated with, arguably anti-correlated with, how hard the posi
 to *carry*.
 
 So `gather` rejects on `roster::squares()`, and `each_puzzle_fits_in_a_head` in
-`tests/database.rs` holds the line. Result: median 12-13, max 14, min 4.
+`tests/database.rs` holds the line. Result: **median 9, max 10, min 4** — the sparsest
+mate-in-4 is `7k/5K2/8/6P1/8/8/3p4/8`, four pieces and a pawn race.
 
-**Why 14 and not 10.** 14 is an honest ceiling, not an ideal. Sparse positions are
-scarce, and mate-in-4 has the smallest pool to begin with: only ~10% of verified
-puzzles come in under 14, and a gate near 10 is simply not reachable at 100/depth.
-Lower it if the pool ever grows.
+**Why 10.** Measured over the whole dump — every `mateInN` row converted, clock-gated
+and re-proved — rather than argued. Verified survivors by gate:
+
+| gate | mate-in-1 | mate-in-2 | mate-in-3 | mate-in-4 |
+|---|---|---|---|---|
+| ≤8 | 21,855 | 14,461 | 1,384 | **131** |
+| ≤10 | 45,510 | 34,275 | 3,450 | **271** |
+| ≤14 | 157,258 | 161,399 | 17,812 | **1,242** |
+
+Mate-in-4 binds; 271 is 2.7x the 100 we keep, which is enough for `select` to choose.
+At 8 it is 131 — a 76% keep rate, i.e. `select` rounding down again — and below 8 the
+tier empties.
+
+**This section previously said 14, on the grounds that "a gate near 10 is simply not
+reachable at 100/depth for mate-in-4".** That was asserted and never measured, and it
+was false by 2.7x. It cost the user directly: at 14 the median roster was 12-13, at 10
+it is 9. Recording it because it is the exact failure this file exists to prevent — a
+number invented, written down as a settled decision, and then obeyed.
 
 **Measure the position the user is *shown*, not the row's FEN.** The row is a ply
 early, and its setup move may be a capture — `00AfZ` is 15 squares raw and 14 shown.

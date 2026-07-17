@@ -61,10 +61,10 @@ fn main() -> std::process::ExitCode {
 fn run(dump_path: &str, out_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("reading {dump_path}");
     let reader = std::io::BufReader::new(dump::Archive::open(dump_path)?);
-    let pool = gather::of_rows(reader, |pool| {
+    let mut pool = gather::of_rows(reader, |pool| {
         let have: Vec<String> = constants::DEPTHS
             .iter()
-            .map(|d| format!("{d}:{}", pool.by_depth.get(d).map_or(0, Vec::len)))
+            .map(|d| format!("{d}:{}", pool.candidates(*d)))
             .collect();
         println!(
             "  scanned {} rows, candidates {}",
@@ -84,7 +84,7 @@ fn run(dump_path: &str, out_dir: &str) -> Result<(), Box<dyn std::error::Error>>
         r.too_heavy,
         r.drawish
     );
-    if !gather::is_full(&pool) {
+    if !pool.is_full() {
         println!("  note: ran out of dump before every depth filled");
     }
 
@@ -92,7 +92,9 @@ fn run(dump_path: &str, out_dir: &str) -> Result<(), Box<dyn std::error::Error>>
     let mut total = 0usize;
 
     for depth in constants::DEPTHS {
-        let found = pool.by_depth.get(&depth).cloned().unwrap_or_default();
+        // `remove`, not `get().cloned()`: the pool is ours and each depth is read
+        // exactly once, so cloning up to 6,000 puzzles per tier buys nothing.
+        let found = pool.by_depth.remove(&depth).unwrap_or_default();
         println!("\nmate in {depth}: verifying {} candidates", found.len());
 
         // The expensive half. Each `verify` re-proves the puzzle from scratch —

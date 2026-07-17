@@ -45,6 +45,37 @@ impl Rejected {
     pub fn total(&self) -> usize {
         self.malformed + self.mislabelled + self.too_heavy + self.drawish
     }
+
+    /// Count one rejection. Lives next to the fields so that adding a reason means
+    /// touching the enum and this block, rather than a `match` in the middle of the
+    /// scan loop that carries no information beyond "variant N is field N".
+    fn tally(&mut self, reason: Reject) {
+        match reason {
+            Reject::Malformed => self.malformed += 1,
+            Reject::Mislabelled => self.mislabelled += 1,
+            Reject::TooHeavy => self.too_heavy += 1,
+            Reject::Drawish => self.drawish += 1,
+        }
+    }
+}
+
+impl Pool {
+    /// How many candidates a depth has so far.
+    pub fn candidates(&self, depth: usize) -> usize {
+        self.by_depth.get(&depth).map_or(0, Vec::len)
+    }
+
+    /// Every depth has all the candidates it will take, so the scan can stop.
+    ///
+    /// `all`, emphatically not `any`: the abundant tiers fill first and the scarce
+    /// ones (mate-in-3, mate-in-4) need the rest of the file. Stopping when any depth
+    /// filled would under-gather exactly the depths that can least afford it, and it
+    /// would do so silently — `run`'s "ran out of dump" note is gated on this.
+    pub fn is_full(&self) -> bool {
+        constants::DEPTHS
+            .iter()
+            .all(|d| self.candidates(*d) >= constants::CANDIDATES_PER_DEPTH)
+    }
 }
 
 /// Read rows until every depth has [`constants::CANDIDATES_PER_DEPTH`], or EOF.
@@ -80,8 +111,8 @@ pub fn of_rows(
         };
         let depth = *depth;
 
-        if pool.by_depth.get(&depth).map_or(0, Vec::len) >= constants::CANDIDATES_PER_DEPTH {
-            if is_full(&pool) {
+        if pool.candidates(depth) >= constants::CANDIDATES_PER_DEPTH {
+            if pool.is_full() {
                 break;
             }
             continue;
@@ -89,23 +120,11 @@ pub fn of_rows(
 
         match candidate(&row, depth) {
             Ok(p) => pool.by_depth.entry(depth).or_default().push(p),
-            Err(reason) => match reason {
-                Reject::Malformed => pool.rejected.malformed += 1,
-                Reject::Mislabelled => pool.rejected.mislabelled += 1,
-                Reject::TooHeavy => pool.rejected.too_heavy += 1,
-                Reject::Drawish => pool.rejected.drawish += 1,
-            },
+            Err(reason) => pool.rejected.tally(reason),
         }
     }
 
     Ok(pool)
-}
-
-/// Every depth has all the candidates it will take.
-pub fn is_full(pool: &Pool) -> bool {
-    constants::DEPTHS
-        .iter()
-        .all(|d| pool.by_depth.get(d).map_or(0, Vec::len) >= constants::CANDIDATES_PER_DEPTH)
 }
 
 enum Reject {

@@ -24,21 +24,20 @@ pub const PER_DEPTH: usize = 100;
 
 /// How many candidates to gather per depth before verifying.
 ///
-/// Sized for **choice, not survival**. The tempting sum is "400 candidates × ~35%
-/// mate-in-4 survival ≈ 140, comfortably past `PER_DEPTH`" — and that is exactly the
-/// wrong target. A pool of 140 to pick 100 from is a 71% keep rate: `select` stops
-/// selecting and starts rounding down, and the roster gate below has nothing to
-/// choose between.
+/// A **ceiling on work, not a target**. Gates are applied before the pool, so these
+/// are already roster- and clock-filtered rows; the number only bounds how many the
+/// abundant tiers bother to collect. Mate-in-1 and mate-in-2 hit it early; mate-in-3
+/// and mate-in-4 never do — at [`MAX_ROSTER_SQUARES`] there are only ~766 mate-in-4
+/// rows in the whole dump, so those tiers read the file to EOF and take what exists.
 ///
-/// So this is sized off the *scarcest* thing we filter on rather than the tier's
-/// survival rate. Only ~10% of verified puzzles come in under
-/// [`MAX_ROSTER_SQUARES`], so hitting `PER_DEPTH` needs roughly 10x the survivors,
-/// which needs roughly 30x the candidates at mate-in-4's rate.
+/// It replaced a value of 400, which was sized for *survival* — "400 × ~35% ≈ 140,
+/// comfortably past `PER_DEPTH`" — and that is the wrong target: a pool of 140 to pick
+/// 100 from is a 71% keep rate, at which `select` stops selecting and starts rounding
+/// down. What matters is choice, and the scarce tiers get it only by reading
+/// everything.
 ///
-/// The economy this used to protect was imaginary: verification is ~13 ms for a
-/// mate-in-4 and `run` already parallelizes it, so even 6,000 candidates across four
-/// depths is a couple of minutes on one core and seconds on twelve — for a tool that
-/// runs once, offline, against a 302 MB download.
+/// The economy the old value protected was imaginary: verification is ~13 ms for a
+/// mate-in-4 and `run` already parallelizes it, so the whole run is seconds.
 pub const CANDIDATES_PER_DEPTH: usize = 6_000;
 
 /// The most squares a puzzle's roster may name.
@@ -49,11 +48,27 @@ pub const CANDIDATES_PER_DEPTH: usize = 6_000;
 /// at all: the first cut of this database shipped a mate-in-**one** with all 32 pieces
 /// on the board, rated 1029, whose roster ran to twelve lines.
 ///
-/// 14 is an honest ceiling rather than an ideal. Sparse positions are scarce — a
-/// tighter gate of ~10 is simply not reachable at [`PER_DEPTH`] for mate-in-4, which
-/// is the tier with the smallest pool to begin with. Lower it if the pool ever grows;
-/// `each_depth_fits_in_a_head` in `tests/database.rs` is what holds it.
-pub const MAX_ROSTER_SQUARES: usize = 14;
+/// **10 is measured, not guessed**, and the measurement is the whole dump — every
+/// `mateInN` row converted, clock-gated, and re-proved. Verified survivors by gate:
+///
+/// ```text
+/// gate  mate-in-1  mate-in-2  mate-in-3  mate-in-4   (need PER_DEPTH = 100)
+///  <=8     21,855     14,461      1,384        131
+///  <=10    45,510     34,275      3,450        271
+///  <=14   157,258    161,399     17,812      1,242
+/// ```
+///
+/// Mate-in-4 is the binding tier, and 271 is 2.7x what we keep — enough for `select`
+/// to actually choose. At 8 it is 131, a 76% keep rate, which is `select` rounding
+/// down again. Below 8 the tier empties.
+///
+/// An earlier draft of this constant was 14 and said a gate near 10 was "simply not
+/// reachable at `PER_DEPTH` for mate-in-4". That was asserted, never measured, and it
+/// is false by 2.7x — the table above is what it should have been. Do not re-raise
+/// this without re-running the numbers; a looser gate costs the user directly.
+///
+/// `each_puzzle_fits_in_a_head` in `tests/database.rs` is what holds it.
+pub const MAX_ROSTER_SQUARES: usize = 10;
 
 /// Reject a candidate whose halfmove clock is this high or higher.
 ///
