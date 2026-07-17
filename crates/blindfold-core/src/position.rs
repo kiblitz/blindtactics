@@ -23,17 +23,34 @@ pub enum Error {
 /// Write a position back out as a FEN.
 ///
 /// Uses [`shakmaty::EnPassantMode::Legal`], so the en-passant square is recorded
-/// only when a capture can actually be played there. All three modes round-trip
-/// (shakmaty normalises an unusable square away on parse), so this is a choice
-/// about *canonical form*, not correctness — which is exactly why it belongs here
-/// once rather than at each call site, where two authors would pick differently
-/// and the database would carry both spellings of the same position.
+/// only when a capture can actually be played there.
+///
+/// Every mode round-trips, so this is a choice about *canonical form* rather than
+/// correctness — which is exactly why it belongs here once rather than at each call
+/// site, where two authors would pick differently and the database would carry both
+/// spellings of the same position.
+///
+/// But mind *why* they all round-trip, because the obvious explanation is wrong and
+/// the real one has teeth. Parsing does **not** normalise a dead en-passant square
+/// away: `of_fen("… w - b6")` gives a position whose `ep_square(Always)` is still
+/// `Some(B6)`. What happens is that `impl PartialEq for Chess` compares
+/// `legal_ep_square()`, so it simply cannot see the difference. In other words
+/// `Chess`'s equality is blind to precisely the field this function is choosing
+/// about — so no test written in terms of `==` can check that choice, and one here
+/// has to read the FEN's fourth field directly. `Chess::eq` ignores the halfmove and
+/// fullmove clocks for the same reason.
 ///
 /// `Legal` is the one that matches [`crate::roster`], which announces the square
-/// under the same rule. That keeps a property worth having: the stored FEN holds
-/// exactly the state the user is told about — nothing hidden, nothing announced
-/// that is not there. `Always` would preserve dead en-passant squares, which the
-/// raw Lichess FEN carries routinely and which no user could ever use.
+/// under the same rule — so the FEN records an en-passant square exactly when the
+/// user is told about one. `Always` would preserve dead en-passant squares, which
+/// the raw Lichess FEN carries routinely and which no user could ever use.
+///
+/// Note the claim is about the *en-passant square only*, not about the FEN as a
+/// whole: a FEN also carries the halfmove clock and fullmove number, which the
+/// roster never announces and nothing in this crate reads. They are not a gap —
+/// shakmaty implements neither the 50-move rule nor repetition, so no mate can
+/// turn on them (see CLAUDE.md) — but they are written, so "the FEN holds exactly
+/// what the user is told" would be too strong.
 pub fn to_fen(pos: &shakmaty::Chess) -> String {
     shakmaty::fen::Fen::from_position(pos, shakmaty::EnPassantMode::Legal).to_string()
 }

@@ -74,12 +74,18 @@ pub const MAX_LINE: usize = 8;
 /// Why it does not reject legitimate work. Two arguments, and it matters which is
 /// which — an earlier version of this doc ran them together and overclaimed.
 ///
-/// **Proven.** Only three plies of a solution ever generate a frontier. The last
-/// arrow is `is_last`, so `judge` returns without pushing; with [`MAX_DEPTH`] = 4
-/// that leaves three advancing plies. Measured growth on `UNBOUNDED_FRONTIER` (no
-/// defense ever refutes it, so nothing prunes) is `[30, 926, 29203, 933297, ...]`,
-/// ~32x per ply. The bound therefore cannot be reached by a four-arrow line at the
-/// plies that blow up; it takes **five or more arrows**, which no solution has.
+/// **Proven, for a solution.** Only three plies of a *solution* ever generate a
+/// frontier: the last arrow is `is_last`, so `judge` returns without pushing, and
+/// [`MAX_DEPTH`] = 4 leaves three advancing plies. Measured growth on
+/// `UNBOUNDED_FRONTIER` (no defense ever refutes it, so nothing prunes) is
+/// `[30, 926, 29203, 933297, ...]`, ~32x per ply. Reaching the bound takes **five
+/// or more arrows**, and no solution has them.
+///
+/// Note the scope. `judge` itself bounds submissions by [`MAX_LINE`] = 8, not by
+/// [`MAX_DEPTH`], so a *user* may draw 5-8 arrows and build four columns or more —
+/// `examples/frontier_memory.rs` does exactly that on purpose. That is the case the
+/// bound exists for, and it is covered by the fail-safe paragraph below, not by
+/// this one.
 ///
 /// **Empirical.** What remains is the third column, and that is a measurement, not
 /// a theorem. Sweeping the one shape immune to the usual self-correction — black

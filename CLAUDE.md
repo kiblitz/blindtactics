@@ -110,7 +110,7 @@ blindfold-chess-trainer/
 
 ### Current status
 
-- `blindfold-core` — built, 92 tests, clippy clean.
+- `blindfold-core` — built, 93 tests, clippy clean.
 - `blindfold-curate` — **not started. This is the next thing to build.**
 - `blindfold-web` — not started.
 - `database/` — **does not exist.** Nothing has been curated yet.
@@ -139,8 +139,11 @@ disagree about what "solved" means); and it insulates us from frontend framework
 - `puzzle` — the `Puzzle` model, JSONL load/save, and `verify()`.
 - `position` — FEN <-> legal position. Its own module because parsing a FEN has nothing to
   do with puzzles, and the curation tool must parse the *raw Lichess* FEN, which is
-  explicitly not a puzzle FEN. `to_fen` commits to `EnPassantMode::Legal` so the stored FEN
-  carries exactly the state `roster` announces.
+  explicitly not a puzzle FEN. `to_fen` commits to `EnPassantMode::Legal`, so the stored FEN
+  names an ep square exactly when `roster` announces one. **`Chess`'s `PartialEq` ignores
+  both the ep square (unless a capture is legal) and the clocks** — it is blind to the very
+  field `to_fen` chooses about, so tests of `to_fen` must compare FEN *strings*. A test
+  phrased as `Chess == Chess` here is vacuous, and one already was.
 - `constants` — named constants. Per the global rule, they live here rather than inline.
 
 There is deliberately **no `attempt` module**. Validating a submission is exactly
@@ -169,6 +172,25 @@ and the roster's reach were each tested thoroughly, and never against each other
 En passant is read with `EnPassantMode::Legal`, so a square nobody can capture on is not
 announced. Sound because ep rights expire after one ply — a square with no legal capture
 now can never matter later.
+
+**The roster is now complete, and this is checked rather than assumed.** A chess position is
+placement + turn + castling + ep + halfmove clock + fullmove number. The roster carries the
+first four, and the last two provably cannot matter: **shakmaty implements neither the
+50-move rule, the 75-move rule, nor repetition.** `is_checkmate()` is `!checkers().is_empty()
+&& legal_moves().is_empty()` and never reads `halfmoves`; `Chess` stores no history, so
+repetition is not even representable; `halfmoves` exists only to round-trip a FEN. Verified
+at source in shakmaty 0.30.1 and empirically (clock set to 0/49/99/100/149/150/200 across
+fixtures — `find_linear` and `outcome` identical at every value). So `judge`, `find_linear`
+and `min_depth` are functions of exactly the four things the roster announces. A collision
+hunt over 217k positions found 79 equal-roster pairs and **zero** with different answers;
+every pair differed only in the two clocks.
+
+Two consequences worth not re-deriving. First, `text()` was incidentally shown injective over
+217k rosters. Second, since shakmaty has no 50-move rule, a line crossing halfmove 100 would
+let a real defender claim a draw our solver would not see — unreachable in practice (Lichess
+auto-draws at 50, so source clocks cap near 99, and a mate-in-4 is ≤7 plies against the 150
+needed for the automatic draw), but the curation tool could close even the theoretical gap
+for free by rejecting high-clock candidates.
 
 ### Why arrows, not `shakmaty::Move`s
 
