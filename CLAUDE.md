@@ -186,11 +186,20 @@ hunt over 217k positions found 79 equal-roster pairs and **zero** with different
 every pair differed only in the two clocks.
 
 Two consequences worth not re-deriving. First, `text()` was incidentally shown injective over
-217k rosters. Second, since shakmaty has no 50-move rule, a line crossing halfmove 100 would
-let a real defender claim a draw our solver would not see — unreachable in practice (Lichess
-auto-draws at 50, so source clocks cap near 99, and a mate-in-4 is ≤7 plies against the 150
-needed for the automatic draw), but the curation tool could close even the theoretical gap
-for free by rejecting high-clock candidates.
+217k rosters. Second — and mind the two thresholds, because conflating them is how the first
+draft of this paragraph refuted itself — shakmaty has no 50-move rule, so a line crossing
+halfmove 100 hands a real defender a **claimable** draw our solver cannot see:
+
+- The **automatic** draw (halfmove 150) is genuinely unreachable. Lichess auto-draws at the
+  50-move rule, so source clocks cap near 99, and a mate-in-4 is ≤7 plies: 99 + 7 = 106.
+- The **claimable** draw (halfmove 100) is *not* unreachable, by those same numbers. It needs
+  a source clock ≥93 and a line whose every ply is a quiet non-capture, since a pawn move or
+  capture zeroes the clock. Rare — but "rare" is not "impossible", and a mate the defender can
+  simply decline to lose is not a mate.
+
+Cheap to close: have the curation tool reject candidates whose halfmove clock is high enough
+to matter. Do it there rather than in `judge`, which must stay a pure function of the four
+things the roster carries — see the `to_fen` note about `Chess::eq` ignoring the clocks.
 
 ### Why arrows, not `shakmaty::Move`s
 
@@ -295,6 +304,12 @@ Prunings deliberately NOT added, with reasons:
   by the fast native suite — rather than hand-rolled at the call site in the one crate with
   no test culture yet. Do this **when building the curation tool**, not before; it is the
   first thing that tool should reach for.
+- **Have the curation tool reject high-halfmove-clock candidates.** shakmaty has no 50-move
+  rule, so a line crossing halfmove 100 gives the defender a claimable draw the solver cannot
+  see. Needs a source clock ≥93 plus an all-quiet line, so it is rare rather than impossible —
+  and a mate the defender can decline to lose is not a mate. Belongs in curation, not `judge`,
+  which must stay a function of exactly what the roster carries. Free to implement; see the
+  roster-completeness section.
 - **`search` has no frontier bound while `judge` does** (flagged at 35). Currently safe:
   `MAX_DEPTH` caps `find_linear`'s frontier well under the bound, and the doc says not to
   hand it untrusted input. Worth closing anyway, since the two functions are documented as

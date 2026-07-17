@@ -44,10 +44,13 @@ fn round_trips_every_fixture() {
     }
 }
 
-/// The clocks survive `to_fen`, which `round_trips_every_fixture` could not check
-/// on its own — every fixture there happens to sit at `0 1`.
+/// The **halfmove** clock survives `to_fen`, which no fixture above exercises —
+/// every one of them sits at halfmove `0`.
 ///
-/// Nothing reads the clocks today and no mate can turn on them (shakmaty has no
+/// Only the halfmove clock, to be precise: `DIVERGENT_DEFENSE` is at fullmove 34,
+/// so `round_trips_every_fixture` does cover that half already.
+///
+/// Nothing reads either clock today and no mate can turn on them (shakmaty has no
 /// 50-move rule), but they are written into the database, and a writer that quietly
 /// reset them would be invisible to `Chess == Chess`.
 #[test]
