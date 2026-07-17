@@ -1,0 +1,24 @@
+[package]
+name = "blindfold-core"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Pure chess logic for the blindfold trainer: arrows, linear mate proving, piece rosters."
+
+[dependencies]
+shakmaty.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[features]
+default = []
+# Enables shakmaty's 694 KiB precomputed magic attack tables. Worth ~20% movegen
+# speed, so the native curation tool turns it on; the wasm build leaves it off to
+# keep the bundle small. Purely a speed/size trade — results are identical.
+magics = ["shakmaty/magics"]
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -1,0 +1,8 @@
+[toolchain]
+# 1.97 rather than the 1.94 used by sibling projects: shakmaty 0.30.1 declares
+# an MSRV of 1.95 (and is edition 2024), so 1.94 cannot build it. Pinned
+# explicitly so this repo never depends on whatever `stable` happens to be.
+channel = "1.97"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

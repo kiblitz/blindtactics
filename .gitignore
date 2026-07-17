@@ -1,0 +1,8 @@
+/target
+/dist
+**/*.rs.bk
+
+# The raw Lichess dump (~250 MB compressed, ~1 GB raw). Never committed; the
+# curation tool downloads it on demand into this scratch directory. Only the
+# curated subset in `database/` is tracked.
+/.cache/

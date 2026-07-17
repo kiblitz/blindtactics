@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/blindfold-core",
+]
+
+[workspace.package]
+edition = "2021"
+# GPL-3.0-or-later is forced by shakmaty, which is GPL-3.0-or-later. Shipping a
+# .wasm bundle to a browser counts as distribution (GPL has no network loophole),
+# so the whole trainer inherits it. Accepted deliberately; see CLAUDE.md.
+license = "GPL-3.0-or-later"
+rust-version = "1.97"
+version = "0.0.1"
+authors = ["Blindfold Chess Trainer contributors"]
+
+[workspace.dependencies]
+# `magics` (694 KiB of precomputed attack tables, on by default upstream) is
+# switched off here and re-enabled only by the native curation tool via
+# `blindfold-core`'s `magics` feature. The browser does no deep search, so the
+# tables would be dead weight in the wasm bundle.
+shakmaty = { version = "0.30", default-features = false, features = ["std"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+
+# Curation-only. Never reachable from the wasm build.
+csv = "1.4"
+zstd = "0.13"
+rayon = "1.12"
+clap = { version = "4", features = ["derive"] }
+ureq = "2"
+
+# Internal crates.
+blindfold-core = { path = "crates/blindfold-core" }
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+# The curation tool walks millions of puzzles; an unoptimized mate search is
+# unusably slow. This makes `cargo test` in dev bearable too.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+debug = "line-tables-only"
+lto = "thin"
+codegen-units = 1

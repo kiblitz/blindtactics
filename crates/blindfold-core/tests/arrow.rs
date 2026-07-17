@@ -1,0 +1,150 @@
+//! Tests for arrow parsing and resolution.
+
+mod common;
+
+use blindfold_core::arrow;
+
+/// Both rooks and both kings home, all castling rights available.
+const CASTLING: &str = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1";
+
+#[test]
+fn round_trips_through_uci() {
+    for uci in ["e2e4", "a1a8", "h7h8q", "e7e8n", "b1c3"] {
+        let a: arrow::Arrow = uci.parse().expect("parses");
+        assert_eq!(a.to_string(), uci);
+    }
+}
+
+#[test]
+fn round_trips_through_json() {
+    let a = common::a("h7h8q");
+    let json = serde_json::to_string(&a).expect("serializes");
+    assert_eq!(
+        json, r#""h7h8q""#,
+        "arrows must serialize as bare UCI strings"
+    );
+    assert_eq!(
+        serde_json::from_str::<arrow::Arrow>(&json).expect("deserializes"),
+        a
+    );
+}
+
+#[test]
+fn parses_promotion() {
+    let a = common::a("e7e8q");
+    assert_eq!(a.from, shakmaty::Square::E7);
+    assert_eq!(a.to, shakmaty::Square::E8);
+    assert_eq!(a.promotion, Some(shakmaty::Role::Queen));
+}
+
+#[test]
+fn rejects_malformed_uci() {
+    assert!("e2e".parse::<arrow::Arrow>().is_err(), "too short");
+    assert!("e2e4e5".parse::<arrow::Arrow>().is_err(), "too long");
+    assert!("z2e4".parse::<arrow::Arrow>().is_err(), "not a file");
+    assert!("e9e4".parse::<arrow::Arrow>().is_err(), "not a rank");
+    assert!(
+        "e7e8k".parse::<arrow::Arrow>().is_err(),
+        "cannot promote to a king"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Castling
+// ---------------------------------------------------------------------------
+
+#[test]
+fn castling_resolves_from_the_kings_travel() {
+    let pos = common::pos(CASTLING);
+    let m = common::a("e1g1").resolve(&pos).expect("O-O is legal");
+    assert!(m.is_castle());
+}
+
+/// A user dragging their king onto their own rook can only mean "castle", and
+/// the Lichess database emits this encoding too (lila carries an `altCastles`
+/// table to undo it). Both spellings must reach the same move.
+#[test]
+fn castling_also_accepts_king_takes_rook() {
+    let pos = common::pos(CASTLING);
+    let standard = common::a("e1g1")
+        .resolve(&pos)
+        .expect("O-O via king travel");
+    let takes_rook = common::a("e1h1")
+        .resolve(&pos)
+        .expect("O-O via king-takes-rook");
+    assert_eq!(standard, takes_rook);
+}
+
+#[test]
+fn castling_queenside_both_spellings() {
+    let pos = common::pos(CASTLING);
+    let standard = common::a("e1c1")
+        .resolve(&pos)
+        .expect("O-O-O via king travel");
+    let takes_rook = common::a("e1a1")
+        .resolve(&pos)
+        .expect("O-O-O via king-takes-rook");
+    assert_eq!(standard, takes_rook);
+    assert!(standard.is_castle());
+}
+
+#[test]
+fn king_takes_rook_is_not_accepted_without_castling_rights() {
+    // Same piece placement, no rights.
+    let pos = common::pos("r3k2r/8/8/8/8/8/8/R3K2R w - - 0 1");
+    assert!(
+        common::a("e1h1").resolve(&pos).is_err(),
+        "no rights, and Rh1 is our own piece"
+    );
+    assert!(common::a("e1g1").resolve(&pos).is_err());
+}
+
+#[test]
+fn of_move_recovers_the_arrow_a_user_would_draw() {
+    let pos = common::pos(CASTLING);
+    let m = common::a("e1g1").resolve(&pos).expect("legal");
+    // Not `e1h1`: the arrow is the king's travel, which is what was dragged.
+    assert_eq!(arrow::Arrow::of_move(&m), Some(common::a("e1g1")));
+}
+
+// ---------------------------------------------------------------------------
+// Resolution
+// ---------------------------------------------------------------------------
+
+#[test]
+fn resolving_an_empty_square_fails() {
+    let pos = common::pos(common::BACK_RANK);
+    assert_eq!(common::a("d4d5").resolve(&pos), Err(arrow::Error::Illegal));
+}
+
+#[test]
+fn resolving_an_opponent_piece_fails() {
+    let pos = common::pos(common::BACK_RANK); // White to move.
+    assert_eq!(
+        common::a("f7f6").resolve(&pos),
+        Err(arrow::Error::Illegal),
+        "f7 is Black's pawn"
+    );
+}
+
+/// The same arrow means different `shakmaty::Move`s in different positions — a
+/// quiet slide in one, a capture in another. This is why arrows, not moves, are
+/// the unit of identity.
+#[test]
+fn one_arrow_resolves_to_different_moves_in_different_positions() {
+    let quiet = common::pos("6k1/8/8/8/8/8/8/R5K1 w - - 0 1");
+    let capture = common::pos("r5k1/8/8/8/8/8/8/R5K1 w - - 0 1");
+
+    let a = common::a("a1a8");
+    let quiet_move = a.resolve(&quiet).expect("legal slide");
+    let capture_move = a.resolve(&capture).expect("legal capture");
+
+    assert_eq!(quiet_move.capture(), None);
+    assert_eq!(capture_move.capture(), Some(shakmaty::Role::Rook));
+    assert_ne!(quiet_move, capture_move, "different moves...");
+    assert_eq!(
+        arrow::Arrow::of_move(&quiet_move),
+        arrow::Arrow::of_move(&capture_move),
+        "...but the very same arrow"
+    );
+}
