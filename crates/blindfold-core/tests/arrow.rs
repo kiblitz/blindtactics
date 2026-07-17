@@ -75,12 +75,34 @@ fn rejects_multibyte_input_without_panicking() {
     }
 }
 
-/// The length error should report what a human sees, not what the allocator does.
+/// The length error must report the same unit the parser gates on.
+///
+/// This once counted characters, on the theory that a person counts characters.
+/// The theory is fine and the conclusion was still wrong: the arity gate matches
+/// on *bytes*, so a string can be rejected for its byte length and then be
+/// described by its character length — and the two disagree exactly when the
+/// input is not ASCII.
+///
+/// `é2é4` is the case that makes it absurd: six bytes, so it never reaches the
+/// four-byte arm, but four characters, so the error read "expected 4 or 5
+/// characters of UCI, got 4". The complaint refuted itself. Note that `中中`,
+/// which is what this test used to check, could never have caught it — two
+/// characters is outside the accepted range, so the message still read sensibly.
+/// The bug needs a char count that lands *inside* the range the gate rejected.
 #[test]
-fn length_error_counts_characters_not_bytes() {
-    match "中中".parse::<arrow::Arrow>() {
-        Err(arrow::ParseError::Length(n)) => assert_eq!(n, 2, "two characters, six bytes"),
-        other => panic!("expected a Length error, got {other:?}"),
+fn length_error_is_reported_in_the_unit_the_parser_gates_on() {
+    for (s, expected) in [("é2é4", 6), ("中中", 6), ("abc", 3), ("e2e4qq", 6)] {
+        match s.parse::<arrow::Arrow>() {
+            Err(arrow::ParseError::Length(n)) => {
+                assert_eq!(n, expected, "{s:?} is {expected} bytes");
+                assert!(
+                    !(4..=5).contains(&n),
+                    "{s:?} was rejected for its length, so the length it reports \
+                     must not be one the parser accepts — got {n}"
+                );
+            }
+            other => panic!("expected a Length error for {s:?}, got {other:?}"),
+        }
     }
 }
 

@@ -21,6 +21,14 @@
 //!
 //! The invariant that makes this work is `of_move(resolve(a)) == a`, pinned by
 //! `tests/arrow.rs::resolve_and_of_move_round_trip`.
+//!
+//! It holds for every arrow a user can draw, with one deliberate exception: a
+//! castle has two UCI spellings. `resolve` accepts both `e1g1` (the king's
+//! travel, which is what a drag produces) and `e1h1` (the king-takes-rook form
+//! shakmaty stores internally), but `of_move` can only return one, and returns
+//! `e1g1`. So `e1h1` survives the round trip as `e1g1`. This is canonicalization,
+//! not drift — both spell the same `Move::Castle` — and `search` depends on it to
+//! avoid offering the same castle twice.
 
 use crate::constants;
 use std::fmt;
@@ -47,7 +55,13 @@ pub enum Error {
 /// Why a string could not be parsed as an arrow.
 #[derive(Clone, PartialEq, Eq, Debug, thiserror::Error)]
 pub enum ParseError {
-    #[error("expected 4 or 5 characters of UCI, got {0}")]
+    /// Counted in bytes, because that is what the parser actually gates on.
+    /// Every arrow that could ever be valid is pure ASCII, so for anything the
+    /// user can usefully be told about, bytes and characters agree. They diverge
+    /// only on input that was never going to parse — and reporting characters
+    /// there produces a self-refuting message: `"é2é4"` is four characters, so
+    /// "expected 4 or 5, got 4" would be the complaint about a rejected string.
+    #[error("expected 4 or 5 bytes of UCI, got {0}")]
     Length(usize),
     #[error("`{0}` is not a square")]
     Square(String),
@@ -164,9 +178,7 @@ impl std::str::FromStr for Arrow {
                 to: square([c, d])?,
                 promotion: Some(promotion(p)?),
             }),
-            // Reported in characters, which is what the message promises and what
-            // a person counts.
-            _ => Err(ParseError::Length(s.chars().count())),
+            _ => Err(ParseError::Length(s.len())),
         }
     }
 }
