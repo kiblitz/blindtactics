@@ -96,14 +96,26 @@ one; everything else has room to filter hard.
 
 ## Architecture
 
+**Only `blindfold-core` exists today.** Everything marked `(planned)` below is
+design intent, not something you can go read. Do not cite it as though it were built.
+
 ```
 blindfold-chess-trainer/
   crates/
     blindfold-core/      Pure logic. No WASM, no DOM, no I/O. The testable heart.
-    blindfold-curate/    Offline CLI: lichess csv.zst -> database/*.jsonl
-    blindfold-web/       Leptos CSR app. Thin. Rendering only.
-  database/              The curated puzzle subset, committed to the repo.
+    blindfold-curate/    (planned) Offline CLI: lichess csv.zst -> database/*.jsonl
+    blindfold-web/       (planned) Leptos CSR app. Thin. Rendering only.
+  database/              (planned) The curated puzzle subset, committed to the repo.
 ```
+
+### Current status
+
+- `blindfold-core` — built, 77 tests, clippy clean.
+- `blindfold-curate` — **not started. This is the next thing to build.**
+- `blindfold-web` — not started.
+- `database/` — **does not exist.** Nothing has been curated yet.
+- CI — **does not exist.** There is no `.github/`. Wherever this file says a check
+  "runs in CI", read it as "is intended to, once CI exists".
 
 **The load-bearing architectural rule:** `blindfold-core` has no dependency on `web-sys`,
 `leptos`, or any I/O. It is tested with plain native `cargo test` — instant, no browser,
@@ -119,15 +131,23 @@ what "solved" means); and it insulates us from frontend framework churn.
 - `arrow` — the user's unit of input, `(from, to, promotion)`. **Read this module first**;
   the decision to make arrows rather than moves the unit of identity explains most of the
   rest of the design.
-- `mate` — `judge` (does this line mate against every defense?) and `find_linear` /
-  `min_depth` (search). The heart of the project.
+- `mate` — `judge` (does this line mate against every defense?), `playback` (what the UI
+  animates on a solve), and `find_linear` / `min_depth` (search). The heart of the project.
 - `roster` — piece locations as **structured data** (`roster::Entry { role, squares }`),
   ordered K/Q/R/B/N/P. Renders to text, to SVG, and later to speech. Never a string.
 - `puzzle` — the `Puzzle` model, JSONL load/save, and `verify()`.
+- `position` — FEN -> legal position. Its own module because parsing a FEN has nothing to
+  do with puzzles, and the curation tool must parse the *raw Lichess* FEN, which is
+  explicitly not a puzzle FEN.
+- `constants` — named constants. Per the global rule, they live here rather than inline.
 
 There is deliberately **no `attempt` module**. Validating a submission is exactly
-`mate::judge(&position, &submitted_arrows)` — the same call the curation tool makes. A
+`mate::judge(&position, &submitted_arrows)` — the same call the curation tool will make. A
 wrapper would only add a layer that could drift.
+
+Text rendering lives in `roster` (core) rather than the web crate because two consumers
+share it — plain text and, later, speech. SVG rendering belongs to the web crate, which is
+its only consumer. That is the line; it is not "no strings in core".
 
 ### Why arrows, not `shakmaty::Move`s
 
@@ -163,15 +183,59 @@ filter for uniqueness. Minimality (`min_depth`) is still enforced, because that 
 - `find_linear(pos, d)` means "at most `d`", not "exactly `d`" — when every defense is
   already mated the recursion bottoms out early and returns a shorter line. `min_depth`
   iteratively deepens for exactly this reason.
+- **`Move::to()` for en passant ignores the promotion suffix.** shakmaty builds
+  `Move::EnPassant` without consulting it, so `e5d6q` and `e5d6` resolve to the same move.
+  `arrow::resolve` rejects a suffix on a non-back-rank target to keep the identity honest.
+- **Cargo's `[profile.dev.package."*"]` matches dependencies only, never workspace
+  members.** Each member needs its own stanza or it stays at opt-level 0 — worth 3.5x on
+  the mate search.
+
+## Cost, and the bounds that exist because of it
+
+Both the judge frontier and the search tree grow **~30x per ply**. Everything below is
+measured, not guessed:
+
+- `judge` on a real mate-in-4: ~14 µs. Instant in-browser, ~1.4 CPU-seconds over a 1M pool.
+- `min_depth(pos, 4)`: ~1 second per position. The **deepest iteration is ~97% of the
+  cost**, which is why `verify` searches `depth - 1` and not `depth` — `judge` has already
+  proved a mate at `depth`, so searching it again is pure waste (measured 42x).
+- `min_depth(pos, 8)` on **two bare kings** does not finish. Depth is therefore clamped to
+  `constants::MAX_DEPTH` before any search, because `Puzzle::depth` arrives from untrusted
+  JSON.
+- An unrefuted line reaches ~30M branches (~5 GiB) in about six seconds, past wasm32's
+  4 GB address space. Hence `constants::MAX_FRONTIER` and `Verdict::TooComplex`.
+
+Prunings deliberately NOT added, with reasons:
+
+- **Checks-only before the final ply — unsound.** Misses quiet keys and zugzwang. A false
+  positive here ships a broken puzzle. Never add it.
+- **Transposition table for iterative deepening — pointless.** The shallow iterations sum
+  to ~2.4% of the deepest one.
+- **Move ordering — pointless here.** `min_depth` is dominated by iterations that must
+  prove *no* mate exists, which are exhaustive by nature.
+- **Dedup in `judge` — measured net loss** (~68% slower). One arrow per ply means no
+  candidate loop to amortize the hashing over.
+- **Dedup in `search` — worth ~1.14x at depth >= 3** (24-34% of ply-2/3 positions are
+  transpositions at mate-in-4, and exactly 0% at mate-in-2). Not done yet; do it after the
+  bigger wins if curation ever needs it.
+
+## Known deferred work
+
+- **`judge` and `search` duplicate the same frontier-advance algorithm** (flagged at 62 in
+  review). They must stay semantically identical or the database and the app disagree;
+  today that is held by `search_and_judge_agree` sampling rather than by construction. The
+  suggested fix is to extract the advance generic over a `Trail` trait (`()` for search,
+  `Vec<Arrow>` for judge, monomorphized away). Deferred, not rejected.
 
 ## Testing
 
 The user has been emphatic about this: aggressive testing is the point, not a chore. It
 is what makes iterating on the UI safe.
 
-- **Database invariant test.** Every puzzle in `database/` is re-proved via
-  `Puzzle::verify()` in CI: legal position, linear, mates in exactly the claimed depth,
-  and minimal. A corrupt or mislabelled puzzle can never reach the app.
+- **Database invariant test** *(intended; neither `database/` nor CI exists yet)*. Every
+  puzzle is to be re-proved via `Puzzle::verify()`: legal position, linear, mates in
+  exactly the claimed depth, and minimal. That is what should stop a corrupt or
+  mislabelled puzzle reaching the app.
 - **Solver tests** against hand-built positions, each isolating one property. The
   fixtures live in `tests/common/mod.rs` and are documented individually — read them
   before adding more.
@@ -202,9 +266,26 @@ with a throwaway `examples/probe.rs` before building tests on it.**
 
 ## Where things live
 
-- `database/` — curated puzzle JSONL, committed. Regenerate with `blindfold-curate`.
 - `crates/` — Rust workspace, one crate per logical concern.
-- `docs/` — design notes. Read before non-trivial decisions.
+- `database/` — *(planned)* curated puzzle JSONL, committed. To be regenerated with
+  `blindfold-curate`.
+
+There is no `docs/` directory. If design notes outgrow this file, create one.
+
+## Measured facts worth not re-deriving
+
+Linearity survival rate — the fraction of Lichess `mateInN` puzzles whose stored line is
+actually linear. Sampled from ~59k real puzzles pulled from the live dump:
+
+| depth | pool (approx) | linear | usable (approx) |
+|---|---|---|---|
+| mateIn1 | 845k | 100% | 845k |
+| mateIn2 | 824k | 93.8% | 773k |
+| mateIn3 | 162k | 61.4% | 99k |
+| mateIn4 | 32k | 34.8% | 11k |
+
+This retires the one risk that could have invalidated the whole design: mate-in-4 is the
+tight tier, and ~11k usable puzzles against a target of ~100 is ample.
 
 ## Working agreements with the user
 

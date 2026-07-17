@@ -2,7 +2,31 @@
 /dist
 **/*.rs.bk
 
-# The raw Lichess dump (~250 MB compressed, ~1 GB raw). Never committed; the
+# The raw Lichess dump (~290 MB compressed, ~1.1 GB raw). Never committed; the
 # curation tool downloads it on demand into this scratch directory. Only the
 # curated subset in `database/` is tracked.
 /.cache/
+
+# Throwaway probes. CLAUDE.md tells you to write one to check a fixture's claim
+# before building tests on it, so they will keep appearing; this stops them being
+# swept up by `git add -A`. Anything worth keeping is a real test, not a probe.
+**/examples/probe*.rs
+**/tests/probe*.rs
+
+# Review-agent scratch worktrees.
+/target-review/
+
+# Editors / OS / tooling.
+.vs/
+.idea/
+.vscode/
+.DS_Store
+*.pdb
+/.playwright-mcp/
+
+# Dev-loop debris. The sibling `dexterity` repo has accumulated 152 stray
+# screenshots and 55 dev logs in its root by not having these — the app-driving
+# and screenshot workflows genuinely do produce them, so they are pre-empted here
+# rather than learned the hard way. Deliberate artefacts can be force-added.
+dev.*.log
+*.png
