@@ -9,6 +9,15 @@
 //! Text rendering lives here rather than in the UI crate because two consumers
 //! share it (plain text and speech). SVG rendering belongs to the web crate,
 //! which is its only consumer.
+//!
+//! **The roster must carry everything that decides the answer, not just placement.**
+//! Chess has two pieces of state that are not "where the pieces are" — castling
+//! rights and the en-passant square — and both can be the whole point of a mate.
+//! Since the user cannot look at the board, anything missing here is not a
+//! presentational gap; it makes the puzzle unsolvable and then marks a correct
+//! answer wrong. `tests/roster.rs::roster_distinguishes_positions_whose_answers_differ`
+//! is what holds this, and it is the test to extend if chess ever grows a third
+//! such thing.
 
 use crate::constants;
 use shakmaty::Position as _;
@@ -21,19 +30,43 @@ pub struct Entry {
     pub squares: Vec<shakmaty::Square>,
 }
 
-/// One side's pieces, ordered king first down to pawns.
+/// Which castles a side may still make.
+///
+/// Rights, not availability: these say the king and rook are unmoved, never that
+/// castling is legal right now. A side in check has its rights and cannot use them
+/// this ply, which is correct to announce — the check may be parried and the right
+/// used later in the line.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Castling {
+    pub kingside: bool,
+    pub queenside: bool,
+}
+
+/// One side's pieces, ordered king first down to pawns, and what it may still do.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Side {
     pub color: shakmaty::Color,
     pub entries: Vec<Entry>,
+    pub castling: Castling,
 }
 
-/// The full piece placement, plus whose turn it is.
+/// Everything the user is told: where the pieces are, whose turn it is, and the
+/// two bits of chess state that are neither.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Roster {
     pub to_move: shakmaty::Color,
     pub white: Side,
     pub black: Side,
+    /// The square an en-passant capture would land on, when one is legal.
+    ///
+    /// Taken with [`shakmaty::EnPassantMode::Legal`], so this is `Some` only when
+    /// the capture can actually be played. That is deliberate on both counts: it
+    /// keeps the roster from announcing a right nobody can use, and it is still
+    /// sound, because en-passant expires after one ply — a square with no legal
+    /// capture *now* can never affect the game, so hiding it cannot hide an answer.
+    /// (`EnPassantMode::Always` would report the FEN's square regardless, which is
+    /// what the raw Lichess FEN carries.)
+    pub en_passant: Option<shakmaty::Square>,
 }
 
 /// Read the roster out of a position.
@@ -42,6 +75,7 @@ pub fn of(pos: &shakmaty::Chess) -> Roster {
         to_move: pos.turn(),
         white: side_of(pos, shakmaty::Color::White),
         black: side_of(pos, shakmaty::Color::Black),
+        en_passant: pos.ep_square(shakmaty::EnPassantMode::Legal),
     }
 }
 
@@ -60,7 +94,15 @@ fn side_of(pos: &shakmaty::Chess, color: shakmaty::Color) -> Side {
             Some(Entry { role, squares })
         })
         .collect();
-    Side { color, entries }
+    let castles = pos.castles();
+    Side {
+        color,
+        entries,
+        castling: Castling {
+            kingside: castles.has(color, shakmaty::CastlingSide::KingSide),
+            queenside: castles.has(color, shakmaty::CastlingSide::QueenSide),
+        },
+    }
 }
 
 impl Roster {
@@ -76,20 +118,44 @@ impl Roster {
     /// Render for reading aloud or displaying as plain text.
     ///
     /// `"white to play. white: king d5, bishops b4 c6, pawns a6 b7 g5. black: king g7."`
+    ///
+    /// En passant is announced last, as its own sentence, because it is a property
+    /// of the position rather than of either side's material — and because a
+    /// blindfold user needs it to land after they have both sides' pawns in mind.
     pub fn text(&self) -> String {
         let mut out = format!("{} to play.", color_name(self.to_move));
         for side in self.sides_in_announce_order() {
             out.push(' ');
             out.push_str(&side.text());
         }
+        if let Some(square) = self.en_passant {
+            out.push_str(&format!(" en passant on {square}."));
+        }
         out
     }
 }
 
 impl Side {
+    /// `"white: king e1, queen f4, rooks a1 c2, may castle queenside."`
     pub fn text(&self) -> String {
-        let listed: Vec<String> = self.entries.iter().map(Entry::text).collect();
+        let mut listed: Vec<String> = self.entries.iter().map(Entry::text).collect();
+        if let Some(castling) = self.castling.text() {
+            listed.push(castling.to_owned());
+        }
         format!("{}: {}.", color_name(self.color), listed.join(", "))
+    }
+}
+
+impl Castling {
+    /// `None` when the side has no rights left, which is the common case and
+    /// deserves silence rather than "may castle neither side".
+    pub fn text(self) -> Option<&'static str> {
+        match (self.kingside, self.queenside) {
+            (true, true) => Some("may castle either side"),
+            (true, false) => Some("may castle kingside"),
+            (false, true) => Some("may castle queenside"),
+            (false, false) => None,
+        }
     }
 }
 
