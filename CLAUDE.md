@@ -125,26 +125,44 @@ one; everything else has room to filter hard.
 
 ## Architecture
 
-**`blindfold-web` does not exist yet.** Everything marked `(planned)` below is design
-intent, not something you can go read. Do not cite it as though it were built.
-
 ```
 blindfold-chess-trainer/
   crates/
     blindfold-core/      Pure logic. No WASM, no DOM, no I/O. The testable heart.
     blindfold-curate/    Offline CLI: lichess csv.zst -> database/*.jsonl
-    blindfold-web/       (planned) Leptos CSR app. Thin. Rendering only.
+    blindfold-web/       Leptos CSR app. Thin. Rendering only.
   database/              The curated puzzle subset, committed to the repo.
 ```
 
 ### Current status
 
-- `blindfold-core` — built, 115 tests, clippy clean.
+- `blindfold-core` — built, 123 tests, clippy clean.
 - `blindfold-curate` — built, 37 tests + 1 `#[ignore]`d. Streams the dump, gates on
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — **not started. This is the next thing to build.**
+- `blindfold-web` — built, 34 tests, clippy clean. Blank board, drag-drawn numbered
+  arrows, roster panel with real piece artwork, submit, animated reveal. Builds to a
+  ~680 KiB wasm bundle with `trunk build --release` (the database is ~46 KiB of that).
+  **KiB, and stated as such deliberately**: an earlier draft said "687 KB" from a
+  byte count read as decimal while `database.rs` said "46 KB" from the same count
+  read as binary, so the one file disagreed with itself. The bundle also drifts with
+  every change — measure it, do not quote this.
+  Driven end to end in a real browser; see "The browser is the only place some bugs
+  exist" below.
+
+**Counts in this file are measured, not estimated — run `cargo test --workspace` and read
+them off it.** This warning is emphatic because the very test count for the web-build commit
+was miscounted *repeatedly* while this section was being written: a "40 new tests" claim was
+"corrected" more than once, each time to a different figure, and each successive review found
+the previous correction had also been invented rather than counted — the fix reproducing the
+bug it fixed, three deep. No specific intermediate figure is reproduced here on purpose: the
+drafts those numbers counted were squashed into one commit, so they can no longer be measured
+against history, and a number you cannot re-measure is exactly the kind you must not carry
+forward. None of these errors ever changed any code; every one was a figure set down as
+settled and obeyed. So the only trustworthy count is the one you just measured. The status
+block above was measured at the time of writing and will drift with the next commit —
+re-measure, do not quote it.
 - `database/` — **400 puzzles, 100 per depth**, curated from the 2026-07-05 dump and
   committed. Rosters run 4-10 squares, median 9. Every one is re-proved by
   `crates/blindfold-curate/tests/database.rs`.
@@ -174,12 +192,17 @@ a thread pool, and a file writer, and nothing worth a test.
 
 **The load-bearing architectural rule:** `blindfold-core` has no dependency on `web-sys`,
 `leptos`, or any I/O. It is tested with plain native `cargo test` — instant, no browser,
-no toolchain. Anything that can live in core, must. The web crate should contain almost
-no logic worth testing.
+no toolchain. Anything that can live in core, must.
 
-This matters three ways: the test suite stays fast; the same solver is to be shared by the
-offline curation tool and the live app, once they exist (so that the DB and the app cannot
-disagree about what "solved" means); and it insulates us from frontend framework churn.
+The web crate should contain almost no logic worth testing *in its components*. That it has
+28 tests anyway is not a contradiction: they cover `square`, `session` and `database`, the
+crate's Leptos-free parts, which is exactly where its logic was pushed so a native test
+could reach it. The rule bites on `board`/`panel`/`line`/`app` — if a test wants to reach
+into one of those, the thing it wants is in the wrong module.
+
+This matters three ways: the test suite stays fast; the same solver is shared by the
+offline curation tool and the live app (so the DB and the app cannot disagree about what
+"solved" means); and it insulates us from frontend framework churn.
 
 ### `blindfold-core` modules
 
@@ -189,8 +212,10 @@ disagree about what "solved" means); and it insulates us from frontend framework
 - `mate` — `judge` (does this line mate against every defense?), `playback` (what the UI
   animates on a solve), and `find_linear` / `min_depth` (search). The heart of the project.
 - `roster` — piece locations as **structured data** (`roster::Entry { role, squares }`),
-  ordered K/Q/R/B/N/P, **plus castling rights and the en-passant square**. Renders to text,
-  to SVG, and later to speech. Never a string.
+  ordered K/Q/R/B/N/P, **plus castling rights and the en-passant square**. Renders to text
+  (`text`, `name`, `color_name`, `heading`) and later to speech, never a string; the *SVG*
+  of a piece is the web crate's, not this module's (see the "Text rendering lives in roster"
+  note below).
 - `puzzle` — the `Puzzle` model, JSONL load/save, and `verify()`.
 - `position` — FEN <-> legal position. Its own module because parsing a FEN has nothing to
   do with puzzles, and the curation tool must parse the *raw Lichess* FEN, which is
@@ -202,12 +227,80 @@ disagree about what "solved" means); and it insulates us from frontend framework
 - `constants` — named constants. Per the global rule, they live here rather than inline.
 
 There is deliberately **no `attempt` module**. Validating a submission is exactly
-`mate::judge(&position, &submitted_arrows)` — the same call the curation tool will make. A
-wrapper would only add a layer that could drift.
+`mate::judge(&position, &submitted_arrows)` — the same call the curation tool makes, and now
+the same call the app makes on submit. A wrapper would only add a layer that could drift.
 
 Text rendering lives in `roster` (core) rather than the web crate because two consumers
 share it — plain text and, later, speech. SVG rendering belongs to the web crate, which is
 its only consumer. That is the line; it is not "no strings in core".
+
+### `blindfold-web` modules
+
+- `square` — the app's only arithmetic: which square a pointer is over, where a square
+  is on screen. **No Leptos in it**, so it is tested natively. Read its doc before
+  touching orientation.
+- `session` — which puzzle, what was drawn, `solve` (one `judge` call), `step_at` (the
+  replay's off-by-one), and `explain` (a refutation as a sentence). Also no Leptos, also
+  natively tested — `explain` and `step_at` live here rather than in `line`/`app` precisely
+  so a native test can reach them.
+- `database` — the committed JSONL, `include_str!`d.
+- `board`, `panel`, `line`, `app` — components. Markup and event plumbing only.
+- `pieces` — Cburnett's artwork, taken from lila (GPLv2-or-later, so compatible with our
+  GPL-3.0-or-later), compiled in. See `assets/pieces/README.md`.
+- `constants` — interface policy: board side, arrow geometry, reveal pacing.
+
+**A lib as well as a bin, for the same reason `blindfold-curate` is** — `tests/` cannot
+import a binary crate's modules. `main.rs` mounts the app and does nothing else.
+
+**Leptos's prelude is glob-imported** in the component modules, against the global
+no-wildcard rule. `view!` needs a large set of traits and types in scope and Leptos is
+built around it; this is the same exception the OCaml rules make for `Core`. The
+non-component modules (`square`, `session`, `database`, `pieces`, `constants`) do not
+import it at all, which is the line worth holding.
+
+### The browser is the only place some bugs exist
+
+The reveal's replay is driven by a Leptos `Effect` that re-arms its own timer. The first
+version read `ply` with `get_untracked`, so the effect never re-ran: the board took
+**exactly one ply** and froze there, still captioned "Mate." Every native test passed —
+`judge` was right, `playback` was right, the pure geometry was right. The bug was in the
+wiring, and only a browser could see it.
+
+So `tests/database.rs::the_replay_ends_in_checkmate` now pins the *data* half (a mate in
+N replays `2N-1` plies and ends in checkmate), and the reactive half is checked by
+driving Chrome with Playwright. That driver is **not checked in yet** — it lives in the
+scratchpad. It should be; note it as owed work rather than pretending native tests cover
+this.
+
+The corollary, stated because it cost a cycle: **`get_untracked` in an `Effect` is how
+you turn a loop into a single shot.** Reach for it only to break a cycle you have
+actually diagnosed.
+
+The timer carries **two** guards and both are load-bearing. `epoch` is identity — a timer
+outlives the attempt that armed it, and one in flight when the user hits "Next" must not
+step the next reveal forward. `ply` is idempotence — the effect can re-run for a ply it has
+already armed, and two timers each incrementing would skip a move. The first version had
+only the ply check and a comment claiming it was the ownership check; it was not, and a
+timer armed at ply 0 sailed through it because `reset` puts ply back to 0 too. A comment
+that asserts a property the code lacks is worse than no comment: the next reader relies on
+it.
+
+### Promotion, and what the app is allowed to know
+
+A pawn reaching the last rank *must* promote and nothing else can, so the two cases are
+disjoint and there is never a "promote, or don't" to ask — only "to what". But deciding
+whether a given drag *is* a pawn's needs to know what stands on `from`, and that depends
+on which defense the opponent picked — which the user has not seen yet. That is the
+whole premise of an `Arrow`.
+
+So `arrow::Arrow::could_be_promotion` asks the question answerable from the drag alone: a
+pawn steps off the rank below onto the last one, straight or one file sideways.
+**Necessary, not sufficient** — a rook on g7 dragged to g8 satisfies it and gets an
+unwanted picker. That is the honest cost of not guessing, and it is cheap.
+
+The first cut used "lands on the last rank" and put a promotion picker beside *both*
+moves of a rook mate-in-2. The narrower condition is not a heuristic; it is a strictly
+necessary precondition, which is why it is allowed.
 
 ### The roster gate — why curation filters on size
 
@@ -408,6 +501,20 @@ Prunings deliberately NOT added, with reasons:
   today that is held by `search_and_judge_agree` sampling rather than by construction. The
   suggested fix is to extract the advance generic over a `Trail` trait (`()` for search,
   `Vec<Arrow>` for judge, monomorphized away). Deferred, not rejected.
+- **Fold the attempt into a value.** `session::Session` guards its own cursor invariant
+  in one place; the *attempt* — the drawn line, the verdict, the replay cursor, and the
+  timer epoch that guards it — is **four** loose signals (`arrows`, `solve`, `ply`, `epoch`)
+  in `app.rs` kept in step by a hand-rolled `reset` closure, in the one module no native
+  test can reach. That is backwards: `lib.rs` says the split must follow the risk, and the
+  risk is in the attempt (both reactive bugs so far lived there). An
+  `Attempt { arrows, solve, ply, epoch }` in `session`, with `reset`/`draw`/`undo`, would
+  be natively testable. Flagged at 60 in review; deferred because the components write to
+  those signals directly and the refactor touches all four.
+- **Check in the browser driver.** The Playwright script that drives the real app —
+  reads the roster, drags the arrows, submits, asserts the reveal — lives in the
+  scratchpad and is the only thing that catches reactive-wiring bugs. It found the
+  frozen-replay bug. Until it is checked in and wired to CI, that class of bug is
+  unguarded.
 - **Sample candidates from the whole dump, not the front of it.** `gather` takes the first
   `CANDIDATES_PER_DEPTH` matching rows in scan order. Lichess IDs are effectively random
   w.r.t. rating, so this is a legitimate sample rather than a bias — but it is *assumed*
@@ -424,10 +531,12 @@ Prunings deliberately NOT added, with reasons:
 The user has been emphatic about this: aggressive testing is the point, not a chore. It
 is what makes iterating on the UI safe.
 
-- **Database invariant test** *(intended; neither `database/` nor CI exists yet)*. Every
-  puzzle is to be re-proved via `Puzzle::verify()`: legal position, linear, mates in
-  exactly the claimed depth, and minimal. That is what should stop a corrupt or
-  mislabelled puzzle reaching the app.
+- **Database invariant test** — `blindfold-curate/tests/database.rs` re-proves every
+  committed puzzle via `Puzzle::verify()`: legal position, linear, mates in exactly the
+  claimed depth, and minimal. `blindfold-web/tests/database.rs` asks the different
+  question of whether the *app* got all of it — the `include_str!` paths are literals
+  and cannot be built from the constants the curator writes with, so that seam needs its
+  own test.
 - **Solver tests** against hand-built positions, each isolating one property. The
   fixtures live in `tests/common/mod.rs` and are documented individually — read them
   before adding more.
@@ -460,8 +569,8 @@ with a throwaway `examples/probe.rs` before building tests on it.**
 ## Where things live
 
 - `crates/` — Rust workspace, one crate per logical concern.
-- `database/` — *(planned)* curated puzzle JSONL, committed. To be regenerated with
-  `blindfold-curate`.
+- `database/` — curated puzzle JSONL, committed. Regenerate with `blindfold-curate`.
+- `crates/blindfold-web/` — `trunk serve` to run it, `trunk build --release` for `dist/`.
 
 There is no `docs/` directory. If design notes outgrow this file, create one.
 

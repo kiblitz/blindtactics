@@ -1,0 +1,28 @@
+[package]
+name = "blindfold-web"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Leptos CSR app: the blank board, the roster, and the arrows."
+
+[dependencies]
+# No `magics`: the browser only ever calls `judge`, which is ~14 µs on a real
+# mate-in-4, so 694 KiB of attack tables would buy nothing and cost a fifth of
+# the bundle. The native curation tool turns them on because it runs the same
+# search millions of times.
+blindfold-core = { path = "../blindfold-core" }
+
+leptos = { version = "0.8", features = ["csr"] }
+shakmaty.workspace = true
+
+# A wasm panic is otherwise `RuntimeError: unreachable` with no message, which is
+# indistinguishable from a browser bug. Cheap enough to keep in release.
+console_error_panic_hook = "0.1"
+
+# Used by `board.rs` to read the board's own box on each pointer event. Both are
+# re-exported by leptos, but named here so the versions are ours to pin rather
+# than whatever a transitive bump hands us.
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["DomRect", "Element", "PointerEvent"] }

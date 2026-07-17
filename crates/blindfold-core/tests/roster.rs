@@ -335,3 +335,83 @@ fn the_en_passant_square_is_announced_but_not_counted() {
     assert!(without.en_passant.is_none());
     assert_eq!(squares_named_in(&without.text()), without.squares());
 }
+
+/// Every word the roster can say about a role, pinned exhaustively.
+///
+/// `pluralizes_by_count` looks like it covers this and does not: its fixture has
+/// a king, a rook and two knights, so ten of the twelve arms below are invisible
+/// to it. Mutation testing found `name(Knight, false) -> "horse"` and
+/// `name(Bishop, true) -> "XX"` both surviving the whole workspace — and the
+/// singular arms are exactly the ones the promotion picker reads, since it calls
+/// `name(role, false)` for each of `PROMOTABLE`. Half the picker's labels and
+/// every one of its `aria-label`s had no coverage at all.
+///
+/// A table rather than a fixture, because this is a vocabulary: the point is that
+/// all twelve are spelled out, which a position can never guarantee.
+#[test]
+fn every_role_has_a_singular_and_a_plural_name() {
+    for (role, singular, plural) in [
+        (shakmaty::Role::King, "king", "kings"),
+        (shakmaty::Role::Queen, "queen", "queens"),
+        (shakmaty::Role::Rook, "rook", "rooks"),
+        (shakmaty::Role::Bishop, "bishop", "bishops"),
+        (shakmaty::Role::Knight, "knight", "knights"),
+        (shakmaty::Role::Pawn, "pawn", "pawns"),
+    ] {
+        assert_eq!(roster::name(role, false), singular);
+        assert_eq!(roster::name(role, true), plural);
+    }
+}
+
+/// The promotion picker labels its choices with `name(role, false)`, and the
+/// roster announces the same word. This is the claim that justified extracting
+/// `name` out of `Entry::name` in the first place, so it gets a test rather than
+/// a comment.
+#[test]
+fn the_roster_and_the_promotion_picker_agree_on_what_a_piece_is_called() {
+    // A position with one of every promotable role, so the roster must announce
+    // each of them in the singular — the same arm the picker reads.
+    let r = roster::of(&common::pos("4k3/8/8/8/8/8/8/RNBQK3 w - - 0 1"));
+    for role in blindfold_core::constants::PROMOTABLE {
+        let announced = r
+            .white
+            .entries
+            .iter()
+            .find(|e| e.role == role)
+            .expect("one of each")
+            .name();
+        assert_eq!(
+            announced,
+            roster::name(role, false),
+            "the roster and the picker must call a {role:?} the same thing"
+        );
+    }
+}
+
+/// `color_name` is the lower-case word in a sentence ("white to play"); `heading`
+/// is the capitalized word at the head of a list ("White"). They must stay one
+/// word apart — the same letters, capitalized — because the panel renders both
+/// into the same DOM and a mismatch would read as two different colours.
+#[test]
+fn a_side_is_named_the_same_in_a_sentence_and_a_heading() {
+    for color in shakmaty::Color::ALL {
+        let sentence = roster::color_name(color);
+        let heading = roster::heading(color);
+        assert_eq!(
+            heading.to_lowercase(),
+            sentence,
+            "the heading is the sentence word capitalized, nothing else"
+        );
+        let mut chars = heading.chars();
+        assert!(
+            chars.next().is_some_and(|c| c.is_uppercase()),
+            "a heading leads with a capital, got: {heading}"
+        );
+        assert!(
+            chars.all(|c| !c.is_uppercase()),
+            "only the first letter is capitalized, got: {heading}"
+        );
+    }
+    assert_eq!(roster::heading(shakmaty::Color::White), "White");
+    assert_eq!(roster::heading(shakmaty::Color::Black), "Black");
+}

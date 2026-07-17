@@ -270,3 +270,145 @@ fn one_arrow_resolves_to_different_moves_in_different_positions() {
         "...but the very same arrow"
     );
 }
+
+/// The promotion rank is the far one, and it differs by colour. Getting this
+/// backwards would offer a promotion picker on a user's *own* back rank — the one
+/// square a pawn of theirs can never reach.
+#[test]
+fn the_promotion_rank_is_the_far_side() {
+    let to_eighth = arrow::Arrow::new(shakmaty::Square::G7, shakmaty::Square::G8);
+    assert!(to_eighth.lands_on_promotion_rank(shakmaty::Color::White));
+    assert!(!to_eighth.lands_on_promotion_rank(shakmaty::Color::Black));
+
+    let to_first = arrow::Arrow::new(shakmaty::Square::G2, shakmaty::Square::G1);
+    assert!(to_first.lands_on_promotion_rank(shakmaty::Color::Black));
+    assert!(!to_first.lands_on_promotion_rank(shakmaty::Color::White));
+
+    // Nowhere near either.
+    let middle = arrow::Arrow::new(shakmaty::Square::E4, shakmaty::Square::E5);
+    for color in shakmaty::Color::ALL {
+        assert!(!middle.lands_on_promotion_rank(color));
+    }
+}
+
+/// `could_be_promotion` is what decides whether the app offers a promotion
+/// picker. It reads the drag alone — a pawn steps from the rank below onto the
+/// last one, straight or one file sideways to capture.
+#[test]
+fn a_promotion_steps_off_the_seventh_rank() {
+    for (from, to, want, what) in [
+        (shakmaty::Square::G7, shakmaty::Square::G8, true, "a push"),
+        (
+            shakmaty::Square::G7,
+            shakmaty::Square::H8,
+            true,
+            "a capture",
+        ),
+        (
+            shakmaty::Square::G7,
+            shakmaty::Square::F8,
+            true,
+            "the other capture",
+        ),
+        (
+            shakmaty::Square::E4,
+            shakmaty::Square::E8,
+            false,
+            "a rook lift lands on the rank but no pawn made it",
+        ),
+        (
+            shakmaty::Square::E8,
+            shakmaty::Square::F8,
+            false,
+            "a slide along the back rank",
+        ),
+        (
+            shakmaty::Square::G7,
+            shakmaty::Square::E8,
+            false,
+            "two files is not a capture — the boundary the condition draws",
+        ),
+        (
+            shakmaty::Square::A7,
+            shakmaty::Square::H8,
+            false,
+            "no pawn moves seven files",
+        ),
+        (
+            shakmaty::Square::G7,
+            shakmaty::Square::G6,
+            false,
+            "the wrong way",
+        ),
+    ] {
+        assert_eq!(
+            arrow::Arrow::new(from, to).could_be_promotion(shakmaty::Color::White),
+            want,
+            "{from}{to}: {what}"
+        );
+    }
+}
+
+/// Black promotes on the first rank, off the second.
+#[test]
+fn black_promotes_the_other_way() {
+    let a = arrow::Arrow::new(shakmaty::Square::B2, shakmaty::Square::B1);
+    assert!(a.could_be_promotion(shakmaty::Color::Black));
+    assert!(!a.could_be_promotion(shakmaty::Color::White));
+}
+
+/// It is a *necessary* condition, not a sufficient one, and the doc says so —
+/// this pins the gap so nobody later reads the name as a promise. A rook on the
+/// seventh dragged one square forward is indistinguishable, from the drag alone,
+/// from a pawn doing the same.
+#[test]
+fn could_be_promotion_cannot_tell_a_rook_from_a_pawn() {
+    let drag = arrow::Arrow::new(shakmaty::Square::G7, shakmaty::Square::G8);
+    assert!(drag.could_be_promotion(shakmaty::Color::White));
+
+    // The same drag, made by a rook. Resolving it against a real position is what
+    // settles the question — and it settles it without the promotion suffix.
+    // Black's king is on h8, not g8: a king beside the rook on g8 would be
+    // capturable, which is "opposite check" and not a position at all. The
+    // first draft of this fixture had exactly that.
+    let with_a_rook = common::pos("7k/6R1/8/8/8/8/8/4K3 w - - 0 1");
+    assert!(
+        drag.resolve(&with_a_rook).is_ok(),
+        "a rook makes this drag legally, with no promotion"
+    );
+    assert!(
+        arrow::Arrow::promoting(
+            shakmaty::Square::G7,
+            shakmaty::Square::G8,
+            shakmaty::Role::Queen
+        )
+        .resolve(&with_a_rook)
+        .is_err(),
+        "and a rook cannot promote"
+    );
+}
+
+/// Black's promotion rank is a back rank too.
+///
+/// `lands_on_back_rank` gates `resolve`'s promotion-suffix check, and it is
+/// derived from `lands_on_promotion_rank` over both colours. Reducing it to
+/// White's half alone — i.e. "Black can never promote" — left all of
+/// `blindfold-core` green: the only thing that caught it was a *curate* test
+/// noticing some committed puzzle happens to promote onto the first rank. The
+/// database is deliberately small and regenerable, so that coverage could vanish
+/// in a regeneration with nothing turning red. Core proves its own rules.
+#[test]
+fn black_may_promote_onto_the_first_rank() {
+    // Black pawn b2, white king h1 tucked away, black to move.
+    let pos = common::pos("4k3/8/8/8/8/8/1p6/6K1 b - - 0 1");
+    assert!(
+        arrow::Arrow::promoting(
+            shakmaty::Square::B2,
+            shakmaty::Square::B1,
+            shakmaty::Role::Queen
+        )
+        .resolve(&pos)
+        .is_ok(),
+        "b2b1q is a legal promotion and must not be rejected as off-back-rank"
+    );
+}

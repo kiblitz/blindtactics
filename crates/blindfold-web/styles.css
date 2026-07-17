@@ -1,0 +1,689 @@
+/*
+ * The blindfold trainer.
+ *
+ * The design has one idea: the board is a void, and solving it is what turns the
+ * void into a board. So the squares carry no colour at all while the user is
+ * blind — just enough of a grid to aim at — and gain their light and dark only on
+ * the reveal. That is also why the pieces can be Cburnett's: black pieces are
+ * black-on-black against a void and only become legible once real squares are
+ * under them.
+ *
+ * Colour tokens are redefined per theme and components only ever read the tokens,
+ * so the two themes cannot drift. The board's own square colours are the
+ * deliberate exception: a chessboard is a chessboard, and it keeps its wood in
+ * both themes.
+ */
+
+:root {
+  --ink: #0e141a;
+  --slate: #19232e;
+  --raised: #212e3b;
+  --line: #33424f;
+  --chalk: #e9e5da;
+  --chalk-dim: #9aa6b0;
+  --chalk-faint: #5d6c79;
+  --amber: #d9a65b;
+  --teal: #4fa9a3;
+  --rose: #c97a6d;
+  --void: #141d25;
+  --void-line: #2b3a47;
+
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* The revealed board. Not themed — see the note above. */
+  --square-light: #d7c9ad;
+  --square-dark: #8f7a5c;
+  --square-played: #d9a65b;
+
+  /*
+   * Files and ranks per side. Must equal `constants::BOARD_SIDE`, which is what
+   * Rust lays the same pieces out with — one fact, and it used to be a `12.5%`
+   * here against a computed percentage there, so only one of them would have
+   * adapted. `nth-child` cannot take a `var()`, so the two selectors below spell
+   * it out and say why.
+   */
+  --board-side: 8;
+
+  /*
+   * Text on an amber ground. Outside the theme blocks deliberately: the primary
+   * button and the arrow badges stay amber in both themes, so their text has to
+   * stay dark in both. This is the file's second exception to "components only
+   * read tokens", and it is one on purpose rather than a missed token.
+   */
+  --on-amber: #0e141a;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --ink: #ebe8e0;
+    --slate: #f7f5ef;
+    --raised: #ffffff;
+    --line: #d2cdc1;
+    --chalk: #1a232d;
+    --chalk-dim: #56626e;
+    --chalk-faint: #8d98a3;
+    --amber: #9c6712;
+    --teal: #25706c;
+    --rose: #a34b3a;
+    --void: #e2ded3;
+    --void-line: #c8c2b3;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ink: #0e141a;
+  --slate: #19232e;
+  --raised: #212e3b;
+  --line: #33424f;
+  --chalk: #e9e5da;
+  --chalk-dim: #9aa6b0;
+  --chalk-faint: #5d6c79;
+  --amber: #d9a65b;
+  --teal: #4fa9a3;
+  --rose: #c97a6d;
+  --void: #141d25;
+  --void-line: #2b3a47;
+}
+
+:root[data-theme="light"] {
+  --ink: #ebe8e0;
+  --slate: #f7f5ef;
+  --raised: #ffffff;
+  --line: #d2cdc1;
+  --chalk: #1a232d;
+  --chalk-dim: #56626e;
+  --chalk-faint: #8d98a3;
+  --amber: #9c6712;
+  --teal: #25706c;
+  --rose: #a34b3a;
+  --void: #e2ded3;
+  --void-line: #c8c2b3;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--chalk);
+  font-family: var(--sans);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.app {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: clamp(1.5rem, 4vw, 3.5rem) clamp(1rem, 3vw, 2rem) 4rem;
+}
+
+/* ---- masthead ---------------------------------------------------------- */
+
+.masthead {
+  margin-bottom: 2rem;
+}
+
+.masthead__eyebrow {
+  margin: 0 0 0.8rem;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--chalk-faint);
+}
+
+.masthead__title {
+  margin: 0 0 0.8rem;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(2rem, 5vw, 3rem);
+  line-height: 1.08;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+
+.masthead__lede {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--chalk-dim);
+}
+
+/* ---- tiers ------------------------------------------------------------- */
+
+.tiers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1.5rem;
+}
+
+.tier {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  padding: 0.34rem 0.62rem;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--chalk-dim);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tier:hover {
+  color: var(--chalk);
+}
+
+.tier--on {
+  border-color: var(--amber);
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+}
+
+/* ---- layout ------------------------------------------------------------ */
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 19rem;
+  gap: 2rem;
+  align-items: start;
+}
+
+@media (max-width: 840px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.layout__panels {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+/* ---- the board --------------------------------------------------------- */
+
+.board {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  background: var(--void);
+  cursor: crosshair;
+  overflow: hidden;
+  /* Or the browser pans the page instead of delivering the drag. */
+  touch-action: none;
+  user-select: none;
+}
+
+.board__squares {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--board-side), 1fr);
+  grid-template-rows: repeat(var(--board-side), 1fr);
+}
+
+/*
+ * Arrows and pieces sit over the squares and must never eat a pointer event: a
+ * drag across an arrow already drawn has to reach the square underneath it.
+ */
+.board__arrows,
+.board__pieces {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.board__arrows {
+  width: 100%;
+  height: 100%;
+  color: var(--amber);
+  transition: opacity 0.5s ease;
+}
+
+/*
+ * The line stays up through the reveal — seeing your own arrows sitting on the
+ * position you could not see is the payoff — but it steps back so the pieces
+ * moving under it are what the eye follows. The panel still lists it in full.
+ */
+.board--revealed .board__arrows {
+  opacity: 0.3;
+}
+
+/* The void. Squares are all one colour, with a hairline grid to aim along. */
+.square {
+  position: relative;
+  border-right: 1px solid var(--void-line);
+  border-bottom: 1px solid var(--void-line);
+  background: transparent;
+  /*
+   * Short, because this also governs a drag highlight being *removed*: at 0.5s
+   * the last squares you touched sit there glowing long after the drag, which
+   * reads as a stuck highlight rather than a fade.
+   */
+  transition: background-color 0.16s ease;
+}
+
+/* The last square of each row, and the whole last row. `nth-child` takes no
+ * `var()`, so these two are the one place `--board-side` is spelled out: `8n` is
+ * every eighth, and `n + 57` is `--board-side * (--board-side - 1) + 1`. */
+.square:nth-child(8n) {
+  border-right: none;
+}
+
+.square:nth-child(n + 57) {
+  border-bottom: none;
+}
+
+/* ...and this is the reveal: the grid becomes a chessboard. */
+.board--revealed .square {
+  border-color: transparent;
+  /* The reveal is the payoff and swells; the value that wins is the one in
+   * effect after the class change, so this governs the void-to-board fade. */
+  transition: background-color 0.5s ease;
+}
+
+.board--revealed .square--light {
+  background: var(--square-light);
+}
+
+.board--revealed .square--dark {
+  background: var(--square-dark);
+}
+
+.board--revealed .square--played {
+  background: var(--square-played);
+}
+
+.square--from,
+.square--to {
+  background: color-mix(in srgb, var(--amber) 18%, transparent);
+  transition: none;
+}
+
+.coord {
+  position: absolute;
+  font-family: var(--mono);
+  font-size: 0.52rem;
+  color: var(--chalk-faint);
+  pointer-events: none;
+}
+
+.board--revealed .coord {
+  color: color-mix(in srgb, #000 55%, transparent);
+}
+
+.coord--file {
+  right: 3px;
+  bottom: 2px;
+}
+
+.coord--rank {
+  top: 2px;
+  left: 3px;
+}
+
+/* ---- arrows ------------------------------------------------------------ */
+
+.arrow line {
+  stroke: currentColor;
+}
+
+.arrow--ghost {
+  opacity: 0.45;
+}
+
+.arrow__badge {
+  fill: currentColor;
+}
+
+/* Size and baseline come from `constants`, not from here: they are tuned against
+ * `ARROW_BADGE_RADIUS`, which is Rust's. */
+.arrow__number {
+  fill: var(--on-amber);
+  font-family: var(--mono);
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+/* ---- pieces ------------------------------------------------------------ */
+
+.piece {
+  position: absolute;
+  width: calc(100% / var(--board-side));
+  height: calc(100% / var(--board-side));
+  padding: 2%;
+  opacity: 0;
+  transform: scale(0.55);
+  animation: piece-appears 0.4s cubic-bezier(0.2, 1.5, 0.4, 1) forwards;
+}
+
+.piece svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+@keyframes piece-appears {
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ---- under the board --------------------------------------------------- */
+
+.hint {
+  margin: 0.8rem 0 0;
+  color: var(--chalk-dim);
+  font-size: 0.88rem;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.1rem;
+  margin: 0.4rem 0 0;
+  font-size: 0.7rem;
+  color: var(--chalk-faint);
+}
+
+/* ---- panels ------------------------------------------------------------ */
+
+.panel {
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line);
+  background: var(--slate);
+}
+
+.panel__title {
+  margin: 0 0 0.8rem;
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--chalk-faint);
+}
+
+.panel__tomove {
+  margin: 0 0 0.9rem;
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  color: var(--amber);
+}
+
+.panel__extra {
+  margin: 0.7rem 0 0;
+  font-size: 0.8rem;
+  color: var(--chalk-dim);
+  font-style: italic;
+}
+
+.side + .side {
+  margin-top: 0.9rem;
+}
+
+.side__name {
+  margin: 0 0 0.3rem;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--chalk-faint);
+}
+
+.side__castling {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--chalk-dim);
+}
+
+.entry {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.1rem 0;
+}
+
+.entry__piece {
+  display: block;
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.entry__piece svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/*
+ * Cburnett's black pieces are black-on-transparent, which is invisible against a
+ * dark panel. A drop-shadow rim reads as an outline at this size without
+ * recolouring the artwork — the roster's knight has to be the same knight the
+ * board reveals, or the user is learning two icon sets.
+ */
+.entry__piece--black svg {
+  filter: drop-shadow(0 0 1px var(--chalk-dim)) drop-shadow(0 0 1px var(--chalk-dim));
+}
+
+.entry__squares {
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+}
+
+/* ---- the line ---------------------------------------------------------- */
+
+.line {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.line__empty {
+  font-size: 0.82rem;
+  font-style: italic;
+  color: var(--chalk-faint);
+}
+
+.line__step {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.line__number {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  background: var(--amber);
+  color: var(--on-amber);
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.line__move {
+  font-family: var(--mono);
+  font-size: 0.84rem;
+}
+
+.line__arrow {
+  color: var(--chalk-faint);
+  padding: 0 0.2rem;
+}
+
+.promotion {
+  display: flex;
+  gap: 0.15rem;
+  margin-left: auto;
+}
+
+.promotion__choice {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0.1rem;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+
+.promotion__choice:hover:not(:disabled) {
+  opacity: 0.8;
+}
+
+.promotion__choice--on {
+  opacity: 1;
+  border-color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 15%, transparent);
+}
+
+.promotion__choice svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---- controls ---------------------------------------------------------- */
+
+.controls {
+  display: flex;
+  gap: 0.45rem;
+  margin-top: 0.9rem;
+}
+
+.button {
+  font: inherit;
+  font-size: 0.83rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--raised);
+  color: var(--chalk);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.button--primary {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: var(--on-amber);
+  font-weight: 600;
+}
+
+.button--primary:hover:not(:disabled) {
+  filter: brightness(1.12);
+  color: var(--on-amber);
+}
+
+:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+/* ---- verdict ----------------------------------------------------------- */
+
+.verdict {
+  margin: 0.7rem 0 0;
+  min-height: 1.3rem;
+  font-size: 0.86rem;
+}
+
+.verdict--ok {
+  color: var(--teal);
+}
+
+.verdict--no {
+  color: var(--rose);
+}
+
+.verdict--hmm {
+  color: var(--chalk-dim);
+}
+
+.verdict__defense {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--chalk-dim);
+  font-size: 0.8rem;
+}
+
+/* ---- colophon ---------------------------------------------------------- */
+
+.colophon {
+  max-width: 72ch;
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+  color: var(--chalk-faint);
+  font-size: 0.83rem;
+}
+
+.colophon p {
+  margin: 0 0 0.8rem;
+}
+
+.colophon a {
+  color: var(--chalk-dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation-duration: 0.01ms !important;
+  }
+
+  /* The keyframe still has to land, or every piece stays at opacity 0. */
+  .piece {
+    opacity: 1;
+    transform: none;
+  }
+}

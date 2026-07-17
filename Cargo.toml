@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/blindfold-core",
     "crates/blindfold-curate",
+    "crates/blindfold-web",
 ]
 
 [workspace.package]
@@ -43,6 +44,9 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.blindfold-curate]
+opt-level = 3
+
+[profile.dev.package.blindfold-web]
 opt-level = 3
 
 [profile.release]

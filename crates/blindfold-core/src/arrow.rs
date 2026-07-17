@@ -118,11 +118,59 @@ impl Arrow {
         .map_err(|_| Error::Illegal)
     }
 
+    /// Whether a `color` pawn making this drag would **have** to promote.
+    ///
+    /// Promotion is mandatory, never optional, so this is not "may promote" — it
+    /// is the whole question. A drag onto the far rank is a promotion if a pawn
+    /// makes it and cannot be one otherwise, and the two cases are disjoint: the
+    /// UI never has to offer "promote, or don't".
+    ///
+    /// It is a fact about chess rather than about rendering, which is why it is
+    /// here and not in the web crate. The app asks it to decide whether to show a
+    /// promotion picker beside an arrow the user has drawn; a blindfold user
+    /// knows from the roster whether the piece on `from` is a pawn, and the app
+    /// deliberately does not tell them.
+    pub fn lands_on_promotion_rank(self, color: shakmaty::Color) -> bool {
+        let rank = match color {
+            shakmaty::Color::White => shakmaty::Rank::Eighth,
+            shakmaty::Color::Black => shakmaty::Rank::First,
+        };
+        self.to.rank() == rank
+    }
+
+    /// Whether a `color` pawn could make this drag at all — the precondition for
+    /// this arrow being a promotion.
+    ///
+    /// **Necessary, not sufficient**, and the gap is deliberate. Deciding it
+    /// exactly needs to know what stands on `from`, which depends on which defense
+    /// the opponent chose — and the whole premise of an [`Arrow`] is that it is
+    /// committed to *before* any reply is seen. So this asks the question that can
+    /// be answered from the drag alone: a pawn promoting steps from the rank below
+    /// onto the last one, straight ahead or one file sideways to capture.
+    ///
+    /// A rook on g7 dragged to g8 satisfies it too, and gets an unwanted promotion
+    /// picker. That is the honest cost of not guessing. The alternative — offering
+    /// the picker on every arrow that merely *lands* on the last rank — put one
+    /// next to both moves of a rook-to-the-eighth mate-in-2, which is where this
+    /// came from.
+    pub fn could_be_promotion(self, color: shakmaty::Color) -> bool {
+        let from = match color {
+            shakmaty::Color::White => shakmaty::Rank::Seventh,
+            shakmaty::Color::Black => shakmaty::Rank::Second,
+        };
+        let sideways = i32::from(self.from.file()).abs_diff(i32::from(self.to.file()));
+        self.lands_on_promotion_rank(color) && self.from.rank() == from && sideways <= 1
+    }
+
+    /// Either promotion rank, whoever is moving — the ranks a promotion suffix is
+    /// meaningful on at all.
+    ///
+    /// Derived from [`Arrow::lands_on_promotion_rank`] rather than re-matching the
+    /// two ranks, so "which rank promotes" is written down exactly once.
     fn lands_on_back_rank(self) -> bool {
-        matches!(
-            self.to.rank(),
-            shakmaty::Rank::First | shakmaty::Rank::Eighth
-        )
+        shakmaty::Color::ALL
+            .into_iter()
+            .any(|color| self.lands_on_promotion_rank(color))
     }
 
     /// The arrow a user would have drawn to play `m`.

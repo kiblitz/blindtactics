@@ -186,27 +186,70 @@ impl Entry {
     }
 
     /// The role's name, pluralized to match the number of squares.
+    ///
+    /// A king is always one square (`tests/roster.rs::both_kings_are_always_present`),
+    /// so it never reaches the plural arm.
     pub fn name(&self) -> &'static str {
-        let plural = self.squares.len() > 1;
-        match (self.role, plural) {
-            (shakmaty::Role::King, _) => "king", // Only ever one.
-            (shakmaty::Role::Queen, false) => "queen",
-            (shakmaty::Role::Queen, true) => "queens",
-            (shakmaty::Role::Rook, false) => "rook",
-            (shakmaty::Role::Rook, true) => "rooks",
-            (shakmaty::Role::Bishop, false) => "bishop",
-            (shakmaty::Role::Bishop, true) => "bishops",
-            (shakmaty::Role::Knight, false) => "knight",
-            (shakmaty::Role::Knight, true) => "knights",
-            (shakmaty::Role::Pawn, false) => "pawn",
-            (shakmaty::Role::Pawn, true) => "pawns",
-        }
+        name(self.role, self.squares.len() > 1)
     }
 }
 
-fn color_name(color: shakmaty::Color) -> &'static str {
+/// What a role is called when it is announced.
+///
+/// The vocabulary the roster reads out, and the one the app labels its promotion
+/// picker with — a picker whose knight said anything but "knight" would be
+/// teaching a second name for a piece the roster has already named. It is also
+/// what the audio mode will speak. One list, three consumers, which is the whole
+/// reason text rendering lives in core rather than in the UI.
+pub fn name(role: shakmaty::Role, plural: bool) -> &'static str {
+    match (role, plural) {
+        (shakmaty::Role::King, false) => "king",
+        (shakmaty::Role::King, true) => "kings",
+        (shakmaty::Role::Queen, false) => "queen",
+        (shakmaty::Role::Queen, true) => "queens",
+        (shakmaty::Role::Rook, false) => "rook",
+        (shakmaty::Role::Rook, true) => "rooks",
+        (shakmaty::Role::Bishop, false) => "bishop",
+        (shakmaty::Role::Bishop, true) => "bishops",
+        (shakmaty::Role::Knight, false) => "knight",
+        (shakmaty::Role::Knight, true) => "knights",
+        (shakmaty::Role::Pawn, false) => "pawn",
+        (shakmaty::Role::Pawn, true) => "pawns",
+    }
+}
+
+/// What a side is called when it is announced.
+///
+/// Public for the same reason [`name`] is: the roster reads "white to play", the
+/// panel heads its list "White", and the audio mode will speak one of them. Three
+/// consumers, and while this was private the web crate simply re-typed the pair —
+/// twice — so the argument the roster makes for roles was quietly not made for
+/// colours.
+///
+/// Lower case, because the roster's sentences are lower case and a caller
+/// wanting a heading can capitalize — see [`heading`]. The reverse is not true.
+pub fn color_name(color: shakmaty::Color) -> &'static str {
     match color {
         shakmaty::Color::White => "white",
         shakmaty::Color::Black => "black",
+    }
+}
+
+/// The capitalized side name, to start a sentence or head a list: "White",
+/// "Black".
+///
+/// Derived from [`color_name`] rather than a second table, so the two cannot
+/// disagree about the word — the panel renders "white to play" and a "White"
+/// heading into the same DOM, and one source is what keeps them the same word.
+/// Lives here rather than in the web crate because it is pure text the audio mode
+/// will also speak, which is the same line [`name`] and [`color_name`] sit on.
+pub fn heading(color: shakmaty::Color) -> String {
+    let name = color_name(color);
+    let mut chars = name.chars();
+    match chars.next() {
+        // `color_name` is ASCII and non-empty, so this capitalizes rather than
+        // pretending to be a general title-caser.
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
 }

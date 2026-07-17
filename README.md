@@ -11,8 +11,11 @@ Mate in 1, 2, 3 and 4.
 
 ## Status
 
-Early. `blindfold-core` (the chess logic) is built and tested. The curation tool, the web
-app, and the puzzle database are not written yet.
+All three crates are built and tested, and the database is committed. `blindfold-core` is
+the chess logic; `blindfold-curate` streams the Lichess dump into `database/`; and
+`blindfold-web` is the Leptos app — a blank board you draw numbered arrows on, with an
+animated reveal on a solve. Run `cargo test --workspace` for the current test count rather
+than trusting a number written here, which is how counts go stale.
 
 ## The one idea worth knowing
 
@@ -35,14 +38,14 @@ trainer wants.
 | Path | What |
 |---|---|
 | `crates/blindfold-core` | Pure logic: arrows, the linearity prover, rosters, the puzzle model. No UI, no I/O. |
-| `crates/blindfold-curate` | *(planned)* Offline CLI: Lichess dump → curated subset. |
-| `crates/blindfold-web` | *(planned)* Leptos client-side app. |
-| `database/` | *(planned)* The curated puzzle subset, committed. |
+| `crates/blindfold-curate` | Offline CLI: Lichess dump → curated subset. |
+| `crates/blindfold-web` | Leptos client-side app. |
+| `database/` | The curated puzzle subset, committed. |
 
 `blindfold-core` depends on no UI and no I/O, so its whole test suite runs under plain
-`cargo test` with no browser or wasm toolchain. It is meant to be shared by the curation
-tool and the app once those exist, so that the database and the live app cannot disagree
-about what "solved" means.
+`cargo test` with no browser or wasm toolchain. It is shared by the curation tool and the
+app, so that the database and the live app cannot disagree about what "solved" means: both
+call `mate::judge`.
 
 ## Build
 
@@ -50,9 +53,9 @@ Requires the pinned toolchain in `rust-toolchain.toml` (1.97 — shakmaty needs 
 rustup will fetch it automatically.
 
 ```sh
-cargo test          # the core suite; fast, no browser needed
-cargo clippy --all-targets
-cargo fmt -- --check
+cargo test --workspace    # all three crates; core is fast and needs no browser
+cargo clippy --workspace --all-targets
+cargo fmt --all -- --check
 ```
 
 ## Licensing
@@ -68,11 +71,19 @@ Third-party material:
 |---|---|---|
 | Puzzle data | [Lichess open database](https://database.lichess.org/) | CC0 1.0 — public domain |
 | Chess logic | [shakmaty](https://github.com/niklasf/shakmaty) | GPL-3.0-or-later |
-| Piece images *(planned)* | [Colin M.L. Burnett, via Wikimedia Commons](https://commons.wikimedia.org/wiki/Category:SVG_chess_pieces) | 3-clause BSD |
+| Piece images | Colin M.L. Burnett, via [`lichess-org/lila`](https://github.com/lichess-org/lila/tree/master/public/piece/cburnett) | GPLv2-or-later |
 
-On the piece images: Wikimedia's file pages show a prominent CC BY-SA 3.0 banner, but the
-underlying template is `{{self|GFDL|migration=relicense|BSD|GPL}}` — Cburnett self-licensed
-under four options and the licensee chooses. We elect **3-clause BSD**, which carries no
-share-alike obligation. (Lichess's `COPYING.md` lists cburnett as GPLv2+; that is Lichess
-electing a different option for their own distribution, and does not bind us. Take the
-files from Wikimedia Commons, not from the lila repo.)
+On the piece images: these are Lichess's optimized Cburnett set, taken from lila and shipped
+verbatim, so lila's own election governs — its `COPYING.md` lists
+`public/piece/cburnett | Colin M.L. Burnett | GPLv2+`. The "or later" is what makes them
+compatible with this project, which is GPL-3.0-or-later already because shakmaty forces it.
+
+Cburnett does self-license the *originals* on Wikimedia Commons under four options (GFDL /
+CC BY-SA 3.0 / 3-clause BSD / GPLv2+ — "You may select the license of your choice"), and an
+earlier draft of this file elected BSD and told you to take the files from Commons. We do
+not: the shipped files are lila's, which are optimized derivatives roughly half the size of
+the Commons originals and are what Lichess actually renders and tests. Electing BSD would
+also have bought this bundle nothing — shakmaty forces GPL-3.0-or-later regardless — so it
+would only have mattered to someone extracting the artwork downstream, who can still fetch
+Cburnett's originals from Commons and elect BSD there. See
+`crates/blindfold-web/assets/pieces/README.md` for the per-file attribution.

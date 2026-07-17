@@ -1,0 +1,4 @@
+[build]
+# GitHub Pages serves a project site from a subdirectory, so absolute asset paths
+# would 404. Relative ones work there and from `file://` alike.
+public_url = "./"
