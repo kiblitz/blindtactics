@@ -8,4 +8,5 @@
 
 pub mod constants;
 pub mod dump;
+pub mod gather;
 pub mod select;

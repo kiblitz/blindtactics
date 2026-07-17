@@ -6,32 +6,38 @@
 //!
 //! # What this is for
 //!
-//! The dump has ~6M puzzles and ~1.9M carry a `mateInN` tag. Almost none of them
-//! are usable here, and the tag cannot tell you which: Lichess stores exactly one
-//! engine-chosen defense per puzzle, so a line that mates in *its* record may lose
-//! to a defense nobody wrote down. Our arrow UI cannot branch, so a puzzle is only
-//! usable if the same arrows mate against **every** defense.
+//! The dump has ~6M puzzles and ~1.9M carry a `mateInN` tag. Almost none of them are
+//! usable here, and the tag cannot tell you which — for two independent reasons.
 //!
-//! So this tool exists to throw things away. Measured on real data, ~35% of
-//! `mateIn4` rows survive; the rest would have been shipped as broken puzzles that
-//! tell a correct solver they were wrong.
+//! Chess: Lichess stores exactly one engine-chosen defense per puzzle, so a line that
+//! mates in *its* record may lose to a defense nobody wrote down. Our arrow UI cannot
+//! branch, so a puzzle is only usable if the same arrows mate against **every**
+//! defense. ~35% of `mateIn4` rows survive that.
+//!
+//! Blindfold: the user never sees the board, so a position with 32 pieces on it is
+//! not a puzzle, it is a memory test. Rating does not track this and is if anything
+//! anti-correlated — the cheapest mate-in-1s are opening traps with full material.
+//!
+//! So this tool exists to throw things away, on both counts.
 //!
 //! # Structure
 //!
-//! All the judgement lives in `blindfold-core` — `lichess::of_row` for the
-//! conversion, `Puzzle::verify` for the proof. This crate is a streaming loop, a
-//! thread pool, and a file writer. That is deliberate: the app and the database must
-//! agree about what "solved" means, and the only way to guarantee that is for both
-//! to call the same code.
+//! All the judgement lives elsewhere: `blindfold-core` for the conversion and the
+//! proof, `gather`/`select` in this crate's lib for the policy. What is left here is
+//! argument handling, a thread pool, and a file writer — the parts that cannot be
+//! unit-tested and therefore should hold nothing worth testing.
+//!
+//! That the app and this tool share `blindfold-core` is the point: the database and
+//! the app must agree about what "solved" means, and calling the same code is the
+//! only way to guarantee it.
 
-use blindfold_core::lichess;
 use blindfold_core::puzzle;
 use blindfold_curate::constants;
 use blindfold_curate::dump;
+use blindfold_curate::gather;
 use blindfold_curate::select;
 use rayon::iter::IntoParallelIterator as _;
 use rayon::iter::ParallelIterator as _;
-use std::io::BufRead as _;
 
 fn main() -> std::process::ExitCode {
     let mut args = std::env::args().skip(1);
@@ -52,15 +58,41 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn run(dump: &str, out_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
-    println!("reading {dump}");
-    let candidates = gather(dump)?;
+fn run(dump_path: &str, out_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+    println!("reading {dump_path}");
+    let reader = std::io::BufReader::new(dump::Archive::open(dump_path)?);
+    let pool = gather::of_rows(reader, |pool| {
+        let have: Vec<String> = constants::DEPTHS
+            .iter()
+            .map(|d| format!("{d}:{}", pool.by_depth.get(d).map_or(0, Vec::len)))
+            .collect();
+        println!(
+            "  scanned {} rows, candidates {}",
+            pool.scanned,
+            have.join(" ")
+        );
+    })?;
+
+    let r = &pool.rejected;
+    println!(
+        "scanned {} rows; rejected {} ({} malformed, {} mislabelled, {} too heavy to \
+         hold, {} drawish)",
+        pool.scanned,
+        r.total(),
+        r.malformed,
+        r.mislabelled,
+        r.too_heavy,
+        r.drawish
+    );
+    if !gather::is_full(&pool) {
+        println!("  note: ran out of dump before every depth filled");
+    }
 
     std::fs::create_dir_all(out_dir)?;
     let mut total = 0usize;
 
     for depth in constants::DEPTHS {
-        let found = candidates.get(&depth).cloned().unwrap_or_default();
+        let found = pool.by_depth.get(&depth).cloned().unwrap_or_default();
         println!("\nmate in {depth}: verifying {} candidates", found.len());
 
         // The expensive half. Each `verify` re-proves the puzzle from scratch —
@@ -70,10 +102,17 @@ fn run(dump: &str, out_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
             .into_par_iter()
             .filter(|p| p.verify().is_ok())
             .collect();
+        println!("mate in {depth}: {} verified", verified.len());
+        if verified.len() < constants::PER_DEPTH {
+            println!(
+                "  warning: only {} survived, wanted {} — the file will be short",
+                verified.len(),
+                constants::PER_DEPTH
+            );
+        }
 
         let kept = select::by_rating_spread(verified, constants::PER_DEPTH);
-        let path =
-            std::path::Path::new(out_dir).join(format!("{}_{depth}.jsonl", constants::FILE_STEM));
+        let path = std::path::Path::new(out_dir).join(constants::file_name(depth));
         std::fs::write(&path, puzzle::to_jsonl(&kept)?)?;
 
         let ratings = match (kept.first(), kept.last()) {
@@ -90,76 +129,4 @@ fn run(dump: &str, out_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n{total} puzzles written to {out_dir}/");
     Ok(())
-}
-
-/// Stream the dump, collecting unverified candidates per depth.
-///
-/// Stops as soon as every depth has [`constants::CANDIDATES_PER_DEPTH`]. Nothing is
-/// verified here — verification costs ~25ms for a mate-in-4 against ~1µs for this
-/// loop, so the two are kept apart and only the survivors of the cheap filter pay
-/// for the expensive one.
-fn gather(
-    dump: &str,
-) -> Result<std::collections::BTreeMap<usize, Vec<puzzle::Puzzle>>, Box<dyn std::error::Error>> {
-    let reader = std::io::BufReader::new(dump::Archive::open(dump)?);
-
-    let themes: Vec<(usize, String)> = constants::DEPTHS
-        .iter()
-        .map(|&d| (d, lichess::mate_theme(d)))
-        .collect();
-
-    let mut out: std::collections::BTreeMap<usize, Vec<puzzle::Puzzle>> = Default::default();
-    let mut scanned = 0usize;
-    let mut rejected = 0usize;
-
-    for line in reader.lines() {
-        let line = line?;
-        scanned += 1;
-        if scanned.is_multiple_of(constants::PROGRESS_EVERY) {
-            let have: Vec<String> = constants::DEPTHS
-                .iter()
-                .map(|d| format!("{d}:{}", out.get(d).map_or(0, Vec::len)))
-                .collect();
-            println!("  scanned {scanned} rows, candidates {}", have.join(" "));
-        }
-
-        // Cheap reject first: ~97% of rows are not mates at all, and this check is a
-        // substring scan against a line we already have in hand.
-        if !line.contains(constants::MATE_THEME_HINT) {
-            continue;
-        }
-        let Ok(row) = lichess::Row::of_csv(&line) else {
-            rejected += 1;
-            continue;
-        };
-        let Some((depth, _)) = themes.iter().find(|(_, theme)| row.has_theme(theme)) else {
-            continue;
-        };
-        let depth = *depth;
-
-        let bucket = out.entry(depth).or_default();
-        if bucket.len() >= constants::CANDIDATES_PER_DEPTH {
-            // Enough of this depth. If every depth is full, we are done — no reason
-            // to read the remaining millions of rows.
-            if constants::DEPTHS
-                .iter()
-                .all(|d| out.get(d).map_or(0, Vec::len) >= constants::CANDIDATES_PER_DEPTH)
-            {
-                println!("  all depths full after {scanned} rows");
-                break;
-            }
-            continue;
-        }
-
-        match lichess::of_row(&row) {
-            Ok(p) if p.depth == depth => bucket.push(p),
-            // A row whose line length disagrees with its own theme tag. Not our
-            // problem to fix; just not a candidate.
-            Ok(_) => rejected += 1,
-            Err(_) => rejected += 1,
-        }
-    }
-
-    println!("scanned {scanned} rows, {rejected} malformed or mislabelled");
-    Ok(out)
 }

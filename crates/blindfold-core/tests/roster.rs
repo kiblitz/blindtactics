@@ -236,3 +236,102 @@ fn both_kings_are_always_present() {
         }
     }
 }
+
+/// `squares` is the blindfold cost of a puzzle, and curation gates on it, so it has
+/// to be the count of things the user is actually told — not of pieces, and not of
+/// roster *entries*.
+#[test]
+fn squares_counts_every_occupied_square() {
+    // Two kings and one rook.
+    assert_eq!(
+        roster::of(&common::pos(common::BACK_RANK_BLACK)).squares(),
+        2 + 1 + 3
+    );
+    // The starting position: every piece still home.
+    assert_eq!(
+        roster::of(&common::pos(
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        ))
+        .squares(),
+        32
+    );
+    // Two bare kings — the floor.
+    assert_eq!(
+        roster::of(&common::pos("4k3/8/8/8/8/8/8/4K3 w - - 0 1")).squares(),
+        2
+    );
+}
+
+/// The trap a naive implementation falls into: one `Entry` can hold many squares, so
+/// counting entries counts *roles*. `UNBOUNDED_FRONTIER` has four black bishops in a
+/// single entry — 5 entries but 7 squares.
+#[test]
+fn squares_counts_squares_not_roster_entries() {
+    let r = roster::of(&common::pos(common::UNBOUNDED_FRONTIER));
+    let entries: usize = [&r.white, &r.black].iter().map(|s| s.entries.len()).sum();
+    assert_eq!(
+        entries, 4,
+        "K, B for white; k, and one bishops entry for black"
+    );
+    assert_eq!(
+        r.squares(),
+        7,
+        "two kings, one white bishop, four black bishops"
+    );
+    assert_ne!(
+        r.squares(),
+        entries,
+        "counting entries would undercount duplicates"
+    );
+}
+
+/// Count algebraic squares in rendered roster text: a letter a-h followed by 1-8.
+fn squares_named_in(text: &str) -> usize {
+    text.as_bytes()
+        .windows(2)
+        .filter(|w| (b'a'..=b'h').contains(&w[0]) && (b'1'..=b'8').contains(&w[1]))
+        .count()
+}
+
+/// `squares` must agree with what the roster actually reads out per side, since that
+/// text is the only thing the user gets. A square announced but uncounted would let
+/// curation ship a puzzle heavier than its gate allows.
+#[test]
+fn squares_matches_the_squares_named_per_side() {
+    for fen in [
+        common::BACK_RANK,
+        common::BRANCHING_LINEAR,
+        common::UNBOUNDED_FRONTIER,
+        common::SMOTHERED,
+        common::EN_PASSANT_MATE,
+        common::CASTLING_MATE,
+    ] {
+        let r = roster::of(&common::pos(fen));
+        let named: usize = [&r.white, &r.black]
+            .iter()
+            .map(|side| squares_named_in(&side.text()))
+            .sum();
+        assert_eq!(r.squares(), named, "roster for {fen}");
+    }
+}
+
+/// The en-passant square is announced but deliberately not counted — it is not a
+/// piece the user has to place. Pinning it so the exclusion is a decision rather than
+/// an oversight: the full text names exactly one more square than `squares()` when
+/// there is an ep square, and exactly as many when there is not.
+#[test]
+fn the_en_passant_square_is_announced_but_not_counted() {
+    let with_ep = roster::of(&common::pos(common::EN_PASSANT_MATE));
+    assert!(with_ep.en_passant.is_some(), "fixture has an ep square");
+    assert_eq!(with_ep.squares(), 5, "two kings, queen, two pawns");
+    assert_eq!(
+        squares_named_in(&with_ep.text()),
+        with_ep.squares() + 1,
+        "the ep square is named on top of the pieces: {}",
+        with_ep.text()
+    );
+
+    let without = roster::of(&common::pos(common::CASTLING_MATE));
+    assert!(without.en_passant.is_none());
+    assert_eq!(squares_named_in(&without.text()), without.squares());
+}

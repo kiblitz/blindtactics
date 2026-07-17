@@ -47,12 +47,27 @@ pub enum Error {
 ///
 /// Note the claim is about the *en-passant square only*, not about the FEN as a
 /// whole: a FEN also carries the halfmove clock and fullmove number, which the
-/// roster never announces and nothing in this crate reads. They are not a gap —
-/// shakmaty implements neither the 50-move rule nor repetition, so no mate can
-/// turn on them (see CLAUDE.md) — but they are written, so "the FEN holds exactly
-/// what the user is told" would be too strong.
+/// roster never announces. They are not a gap for the *solver* — shakmaty implements
+/// neither the 50-move rule nor repetition, so no mate can turn on them (see
+/// CLAUDE.md) — but they are written, so "the FEN holds exactly what the user is
+/// told" would be too strong. The halfmove clock is read by exactly one caller,
+/// [`halfmove_clock`], and never by `judge`.
 pub fn to_fen(pos: &shakmaty::Chess) -> String {
     shakmaty::fen::Fen::from_position(pos, shakmaty::EnPassantMode::Legal).to_string()
+}
+
+/// The halfmove clock: plies since the last capture or pawn move.
+///
+/// Exposed for one reason, and it is not the solver's. shakmaty has no 50-move rule,
+/// so `judge` cannot see a draw the defender could *claim* — and a mate the defender
+/// can decline to lose is not a mate. Curation rejects candidates whose clock is high
+/// enough for that to bite.
+///
+/// This deliberately does not live in `mate`. `judge` must stay a pure function of
+/// exactly the four things the roster carries (placement, turn, castling, en passant),
+/// because that is what makes a puzzle solvable from the roster alone.
+pub fn halfmove_clock(pos: &shakmaty::Chess) -> u32 {
+    shakmaty::Position::halfmoves(pos)
 }
 
 /// Parse a FEN into a legal position.

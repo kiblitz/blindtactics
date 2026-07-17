@@ -106,6 +106,25 @@ fn side_of(pos: &shakmaty::Chess, color: shakmaty::Color) -> Side {
 }
 
 impl Roster {
+    /// How many squares the user has to hold in their head.
+    ///
+    /// The blindfold cost of a puzzle, and the reason this is not simply "pieces on
+    /// the board": what makes a puzzle hard to *carry* is the length of the roster
+    /// being read out, and that is one item per occupied square. Curation gates on
+    /// this — a mate in one is still unusable if finding it means memorizing 32
+    /// squares first.
+    ///
+    /// Castling rights and the en-passant square are deliberately not counted. They
+    /// are announced, and they matter to the answer, but they attach to pieces the
+    /// user is already holding rather than adding new ones.
+    pub fn squares(&self) -> usize {
+        [&self.white, &self.black]
+            .iter()
+            .flat_map(|side| side.entries.iter())
+            .map(|entry| entry.squares.len())
+            .sum()
+    }
+
     /// The side to move, then the other. Announcing the mover first is what a
     /// human does, and it is what the audio mode will want.
     pub fn sides_in_announce_order(&self) -> [&Side; 2] {

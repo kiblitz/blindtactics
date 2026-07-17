@@ -14,7 +14,9 @@
 //! core is deliberately I/O-free, and this needs the `magics` feature that only the
 //! native tools enable.
 
+use blindfold_core::position;
 use blindfold_core::puzzle;
+use blindfold_core::roster;
 use blindfold_curate::constants;
 
 /// The database is at the workspace root; this crate is two levels down. Resolved
@@ -31,7 +33,7 @@ fn database_dir() -> std::path::PathBuf {
 }
 
 fn load(depth: usize) -> Vec<puzzle::Puzzle> {
-    let path = database_dir().join(format!("{}_{depth}.jsonl", constants::FILE_STEM));
+    let path = database_dir().join(constants::file_name(depth));
     let contents =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     puzzle::of_jsonl(&contents).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
@@ -114,8 +116,45 @@ fn each_depth_spans_a_range_of_ratings() {
             *ratings.iter().max().expect("non-empty"),
         );
         assert!(
-            hi - lo > 500,
+            hi - lo > constants::MIN_RATING_SPAN,
             "mate_in_{depth}: ratings span only {lo}-{hi}"
         );
+    }
+}
+
+/// The gate that makes this a *blindfold* trainer. Every committed puzzle must be
+/// holdable in a head — this is the one invariant that chess validity says nothing
+/// about, and `verify` will happily pass a mate-in-1 with 32 pieces on the board.
+#[test]
+fn each_puzzle_fits_in_a_head() {
+    for depth in constants::DEPTHS {
+        for p in load(depth) {
+            let position = p.position().expect("verified elsewhere");
+            let squares = roster::of(&position).squares();
+            assert!(
+                squares <= constants::MAX_ROSTER_SQUARES,
+                "mate_in_{depth}.jsonl: puzzle {} needs {squares} squares memorized",
+                p.id
+            );
+        }
+    }
+}
+
+/// shakmaty implements no 50-move rule, so a puzzle whose clock is high enough hands
+/// the defender a draw they can *claim* and our solver cannot see. `verify` cannot
+/// catch this — it is a fact about the rules shakmaty does not implement — so it is
+/// checked on the committed data instead.
+#[test]
+fn no_puzzle_lets_the_defender_claim_a_draw() {
+    for depth in constants::DEPTHS {
+        for p in load(depth) {
+            let position = p.position().expect("verified elsewhere");
+            let clock = position::halfmove_clock(&position);
+            assert!(
+                clock < constants::MAX_HALFMOVE_CLOCK,
+                "mate_in_{depth}.jsonl: puzzle {} has halfmove clock {clock}",
+                p.id
+            );
+        }
     }
 }
