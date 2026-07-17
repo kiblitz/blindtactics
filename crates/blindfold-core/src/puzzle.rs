@@ -5,11 +5,13 @@
 //!
 //! Note the `fen` here is *not* the Lichess `FEN` column. Lichess stores the
 //! position before the opponent's setup move; we store the position actually
-//! shown to the user, with that move already applied. The curation tool does the
-//! conversion once so nothing downstream has to remember the quirk.
+//! shown to the user, with that move already applied. The curation tool will do
+//! that conversion once, so nothing downstream has to remember the quirk.
 
 use crate::arrow;
+use crate::constants;
 use crate::mate;
+use crate::position;
 use shakmaty::Position as _;
 
 /// A curated, proven-linear mate puzzle.
@@ -22,40 +24,43 @@ pub struct Puzzle {
     /// A proven-linear mating line. Not the only one that may exist; correctness
     /// is decided by playing the user's line out, never by comparing to this.
     pub solution: Vec<arrow::Arrow>,
-    /// Solver moves to mate. Equal to `solution.len()`, and proven minimal: no
-    /// shorter linear mate exists from `fen`.
+    /// Solver moves to mate. Proven minimal: no shorter linear mate exists from
+    /// `fen`.
+    ///
+    /// Redundant with `solution.len()`, and kept anyway: the database is
+    /// committed JSONL that we want to slice with grep (`"depth":3`) without
+    /// running a parser. `verify` checks the two agree.
     pub depth: usize,
-    /// Lichess crowd rating, kept for difficulty ordering.
+    /// Lichess crowd rating, kept for difficulty ordering within a depth.
     pub rating: u32,
-}
-
-#[derive(Clone, Debug, thiserror::Error)]
-pub enum Error {
-    #[error("could not parse FEN `{fen}`: {message}")]
-    Fen { fen: String, message: String },
-    #[error("FEN `{fen}` is not a legal position: {message}")]
-    Position { fen: String, message: String },
 }
 
 impl Puzzle {
     /// The position shown to the user.
-    pub fn position(&self) -> Result<shakmaty::Chess, Error> {
-        position_of_fen(&self.fen)
+    pub fn position(&self) -> Result<shakmaty::Chess, position::Error> {
+        position::of_fen(&self.fen)
     }
 
     /// Whose turn it is to find the mate.
-    pub fn solver(&self) -> Result<shakmaty::Color, Error> {
+    pub fn solver(&self) -> Result<shakmaty::Color, position::Error> {
         Ok(self.position()?.turn())
     }
 
     /// Re-prove this puzzle from scratch: the stored solution really is linear,
     /// really mates, and really is minimal.
     ///
-    /// Every puzzle in `database/` is run through this in CI, so a corrupt or
-    /// mislabelled entry cannot reach the app.
+    /// Every puzzle in `database/` is meant to be run through this in CI, so a
+    /// corrupt or mislabelled entry cannot reach the app.
     pub fn verify(&self) -> Result<(), Invalid> {
-        let pos = self.position().map_err(Invalid::Unparseable)?;
-
+        // Checked before anything expensive: `depth` arrives from untrusted JSON
+        // and is handed to a search whose cost grows ~30x per level. Without this
+        // a line claiming `"depth": 12` is indistinguishable from a hang.
+        if self.depth == 0 || self.depth > constants::MAX_DEPTH {
+            return Err(Invalid::DepthOutOfRange {
+                depth: self.depth,
+                max: constants::MAX_DEPTH,
+            });
+        }
         if self.depth != self.solution.len() {
             return Err(Invalid::DepthMismatch {
                 depth: self.depth,
@@ -63,28 +68,36 @@ impl Puzzle {
             });
         }
 
+        let pos = self.position().map_err(Invalid::Unparseable)?;
+
         match mate::judge(&pos, &self.solution) {
-            mate::Verdict::Mates { plies } if plies == self.depth => {}
-            mate::Verdict::Mates { plies } => {
+            mate::Verdict::Mates { moves } if moves == self.depth => {}
+            mate::Verdict::Mates { moves } => {
                 return Err(Invalid::ShorterThanClaimed {
                     claimed: self.depth,
-                    actual: plies,
+                    actual: moves,
                 })
             }
             mate::Verdict::Refuted { defense, reason } => {
                 return Err(Invalid::NotLinear { defense, reason })
             }
+            mate::Verdict::TooComplex { reason } => return Err(Invalid::TooComplex { reason }),
         }
 
-        // Minimality. A puzzle advertised as mate-in-4 that is really a linear
-        // mate-in-2 would ask the user for arrows the position does not need.
-        match mate::min_depth(&pos, self.depth) {
-            Some(d) if d == self.depth => Ok(()),
-            Some(d) => Err(Invalid::NotMinimal {
+        // Minimality. A puzzle advertised as mate-in-2 that is really a mate-in-1
+        // would ask the user for an arrow the position does not need.
+        //
+        // Only *shorter* lines are in question: `judge` above already proved a
+        // linear mate at `depth` exists, so searching `depth` itself would be
+        // guaranteed to succeed — and it is by far the most expensive search of
+        // the set, ~97% of the total. Searching `depth - 1` instead is exactly
+        // equivalent and measured ~42x faster on mate-in-4.
+        match mate::min_depth(&pos, self.depth - 1) {
+            None => Ok(()),
+            Some(actual) => Err(Invalid::NotMinimal {
                 claimed: self.depth,
-                actual: d,
+                actual,
             }),
-            None => unreachable!("the solution above already mates in `depth`"),
         }
     }
 }
@@ -93,7 +106,9 @@ impl Puzzle {
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Invalid {
     #[error("position does not parse: {0}")]
-    Unparseable(Error),
+    Unparseable(position::Error),
+    #[error("declared depth {depth} is outside 1..={max}")]
+    DepthOutOfRange { depth: usize, max: usize },
     #[error("declared depth {depth} but the solution has {solution} moves")]
     DepthMismatch { depth: usize, solution: usize },
     #[error("solution is not linear: {reason}")]
@@ -105,28 +120,12 @@ pub enum Invalid {
     ShorterThanClaimed { claimed: usize, actual: usize },
     #[error("claimed mate in {claimed} but a linear mate in {actual} exists")]
     NotMinimal { claimed: usize, actual: usize },
-}
-
-/// Parse a FEN into a legal position.
-pub fn position_of_fen(fen: &str) -> Result<shakmaty::Chess, Error> {
-    let parsed: shakmaty::fen::Fen =
-        fen.parse()
-            .map_err(|e: shakmaty::fen::ParseFenError| Error::Fen {
-                fen: fen.to_owned(),
-                message: e.to_string(),
-            })?;
-    parsed
-        .into_position(shakmaty::CastlingMode::Standard)
-        .map_err(
-            |e: shakmaty::PositionError<shakmaty::Chess>| Error::Position {
-                fen: fen.to_owned(),
-                message: e.to_string(),
-            },
-        )
+    #[error("too complex to verify: {reason}")]
+    TooComplex { reason: mate::Limit },
 }
 
 /// Read a JSONL puzzle file.
-pub fn parse_jsonl(contents: &str) -> Result<Vec<Puzzle>, serde_json::Error> {
+pub fn of_jsonl(contents: &str) -> Result<Vec<Puzzle>, serde_json::Error> {
     contents
         .lines()
         .map(str::trim)

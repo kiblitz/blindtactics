@@ -2,10 +2,15 @@
 //!
 //! Modelled as structured data rather than a display string, deliberately. The
 //! same roster has to render three ways: as SVG piece icons beside coordinates,
-//! as plain text, and (later) as speech — "white to play. white: king d5, bishop
+//! as plain text, and (later) as speech — "white to play. white: king d5, bishops
 //! b4 c6, pawns a6 b7 g5. black: king g7." Building a string here would force the
 //! audio mode to parse it back apart.
+//!
+//! Text rendering lives here rather than in the UI crate because two consumers
+//! share it (plain text and speech). SVG rendering belongs to the web crate,
+//! which is its only consumer.
 
+use crate::constants;
 use shakmaty::Position as _;
 
 /// Every square holding a given role, for one side.
@@ -31,18 +36,6 @@ pub struct Roster {
     pub black: Side,
 }
 
-/// Announcement order: the king anchors the position, then descending value.
-/// `shakmaty::Role`'s own ordering runs the other way (pawn first), so it cannot
-/// be used here.
-const ANNOUNCE_ORDER: [shakmaty::Role; 6] = [
-    shakmaty::Role::King,
-    shakmaty::Role::Queen,
-    shakmaty::Role::Rook,
-    shakmaty::Role::Bishop,
-    shakmaty::Role::Knight,
-    shakmaty::Role::Pawn,
-];
-
 /// Read the roster out of a position.
 pub fn of(pos: &shakmaty::Chess) -> Roster {
     Roster {
@@ -54,7 +47,7 @@ pub fn of(pos: &shakmaty::Chess) -> Roster {
 
 fn side_of(pos: &shakmaty::Chess, color: shakmaty::Color) -> Side {
     let board = pos.board();
-    let entries = ANNOUNCE_ORDER
+    let entries = constants::ANNOUNCE_ORDER
         .iter()
         .filter_map(|&role| {
             let mut squares: Vec<shakmaty::Square> = (board.by_color(color) & board.by_role(role))

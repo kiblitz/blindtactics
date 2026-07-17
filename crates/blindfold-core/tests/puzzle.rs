@@ -1,8 +1,9 @@
 //! Tests for the puzzle model and its self-verification.
 //!
-//! `verify` is what stands between a bad puzzle and the user. Every entry in
-//! `database/` is run through it in CI, so these tests are really tests of that
-//! guard rail.
+//! `verify` is what is meant to stand between a bad puzzle and the user: once
+//! `database/` and CI exist, every entry will be run through it. Neither exists
+//! yet, so for now these are tests of a guard rail that is built but not yet
+//! deployed.
 
 mod common;
 
@@ -39,7 +40,7 @@ fn round_trips_through_jsonl() {
         text.contains(r#""solution":["f6g6","b1b8"]"#),
         "arrows stay readable: {text}"
     );
-    assert_eq!(puzzle::parse_jsonl(&text).expect("parses"), puzzles);
+    assert_eq!(puzzle::of_jsonl(&text).expect("parses"), puzzles);
 }
 
 #[test]
@@ -48,7 +49,7 @@ fn jsonl_tolerates_blank_lines() {
         "\n{}\n\n",
         puzzle::to_jsonl(&[good()]).expect("serializes").trim()
     );
-    assert_eq!(puzzle::parse_jsonl(&text).expect("parses").len(), 1);
+    assert_eq!(puzzle::of_jsonl(&text).expect("parses").len(), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +66,22 @@ fn rejects_a_depth_that_disagrees_with_the_solution() {
             solution: 2
         })
     ));
+}
+
+/// `depth` arrives from untrusted JSON and is handed straight to a search whose
+/// cost grows ~30x per level. Unclamped, a line claiming `"depth": 12` is
+/// indistinguishable from a hang — and it would hang the CI job that is supposed
+/// to be guarding the database.
+#[test]
+fn rejects_a_depth_outside_the_supported_range() {
+    for depth in [0, blindfold_core::constants::MAX_DEPTH + 1, 12, usize::MAX] {
+        let p = puzzle::Puzzle { depth, ..good() };
+        assert!(
+            matches!(p.verify(), Err(puzzle::Invalid::DepthOutOfRange { .. })),
+            "depth {depth} must be rejected outright, got {:?}",
+            p.verify()
+        );
+    }
 }
 
 #[test]

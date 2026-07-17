@@ -2,12 +2,13 @@
 
 mod common;
 
+use blindfold_core::constants;
 use blindfold_core::mate;
 
 #[test]
 fn back_rank_mate_in_one() {
     let v = mate::judge(&common::pos(common::BACK_RANK), &common::line("a1a8"));
-    assert_eq!(v, mate::Verdict::Mates { plies: 1 });
+    assert_eq!(v, mate::Verdict::Mates { moves: 1 });
 }
 
 #[test]
@@ -52,7 +53,7 @@ fn linear_line_mates_through_a_branch() {
         &common::pos(common::BRANCHING_LINEAR),
         &common::line("f6g6 b1b8"),
     );
-    assert_eq!(v, mate::Verdict::Mates { plies: 2 });
+    assert_eq!(v, mate::Verdict::Mates { moves: 2 });
 }
 
 /// Sanity-check the fixture itself: Black really does have several defenses, so
@@ -128,14 +129,14 @@ fn a_single_defense_can_hide_non_linearity() {
     // needs every defense, not the one the puzzle author's engine picked.
     assert_eq!(
         mate::judge(&pos, &common::line("b1b8")),
-        mate::Verdict::Mates { plies: 1 }
+        mate::Verdict::Mates { moves: 1 }
     );
 }
 
 #[test]
 fn ladder_mate_is_linear() {
     let v = mate::judge(&common::pos(common::LADDER), &common::line("a1a7 b1b8"));
-    assert_eq!(v, mate::Verdict::Mates { plies: 2 });
+    assert_eq!(v, mate::Verdict::Mates { moves: 2 });
 }
 
 /// Same two arrows, wrong order: `Rb8+` lets the king out to h7 or g7 and `Ra7+`
@@ -174,7 +175,7 @@ fn stalemate_refutes_and_is_reported_as_such() {
 #[test]
 fn the_stalemate_trap_position_does_have_a_mate() {
     let v = mate::judge(&common::pos(common::STALEMATE_TRAP), &common::line("g7b7"));
-    assert_eq!(v, mate::Verdict::Mates { plies: 1 });
+    assert_eq!(v, mate::Verdict::Mates { moves: 1 });
 }
 
 /// A stalemating move must never be offered as a solution.
@@ -219,7 +220,7 @@ fn search_and_judge_agree() {
                 );
                 assert_eq!(
                     mate::judge(&pos, &line),
-                    mate::Verdict::Mates { plies: line.len() },
+                    mate::Verdict::Mates { moves: line.len() },
                     "search found {line:?} at depth {depth} but judge rejects it: {fen}"
                 );
             }
@@ -239,7 +240,7 @@ fn trailing_arrows_after_mate_are_ignored() {
         &common::pos(common::BACK_RANK),
         &common::line("a1a8 a8a7 a7a6"),
     );
-    assert_eq!(v, mate::Verdict::Mates { plies: 1 });
+    assert_eq!(v, mate::Verdict::Mates { moves: 1 });
 }
 
 #[test]
@@ -252,6 +253,119 @@ fn an_empty_line_never_mates() {
             ..
         }
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Bounds
+//
+// Nothing caps how many arrows a user may draw, and judging is breadth-first
+// over every legal defense, so these are what stand between a pathological
+// submission and an out-of-memory abort in the browser.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_over_long_line_is_rejected_before_any_work() {
+    let line: Vec<_> = std::iter::repeat_n(common::a("a1a8"), constants::MAX_LINE + 1).collect();
+    let v = mate::judge(&common::pos(common::BACK_RANK), &line);
+    assert_eq!(
+        v,
+        mate::Verdict::TooComplex {
+            reason: mate::Limit::Length {
+                moves: constants::MAX_LINE + 1
+            }
+        }
+    );
+}
+
+#[test]
+fn a_line_at_the_length_limit_is_still_judged() {
+    let mut line = common::line("a1a8"); // Mates immediately.
+    while line.len() < constants::MAX_LINE {
+        line.push(common::a("a8a7"));
+    }
+    assert_eq!(
+        mate::judge(&common::pos(common::BACK_RANK), &line),
+        mate::Verdict::Mates { moves: 1 },
+        "the limit is inclusive, and trailing arrows after mate are ignored"
+    );
+}
+
+/// The runaway case: a line no defense can refute, whose frontier would reach
+/// ~30M branches and ~5 GiB. Judging must give up honestly rather than die.
+#[test]
+fn a_runaway_frontier_is_reported_not_exhausted() {
+    // Shuffle the dark bishop back and forth. Black cannot touch it.
+    let line = common::line("a1b2 b2a1 a1b2 b2a1 a1b2 b2a1");
+    let v = mate::judge(&common::pos(common::UNBOUNDED_FRONTIER), &line);
+    match v {
+        mate::Verdict::TooComplex {
+            reason: mate::Limit::Frontier { branches },
+        } => {
+            assert!(branches > constants::MAX_FRONTIER);
+        }
+        other => panic!("expected the frontier bound to fire, got {other:?}"),
+    }
+}
+
+/// `TooComplex` must never be mistaken for a solve.
+#[test]
+fn too_complex_does_not_count_as_mating() {
+    let line: Vec<_> = std::iter::repeat_n(common::a("a1a8"), constants::MAX_LINE + 1).collect();
+    assert!(!mate::judge(&common::pos(common::BACK_RANK), &line).mates());
+}
+
+// ---------------------------------------------------------------------------
+// Playback
+// ---------------------------------------------------------------------------
+
+/// `judge` says *whether* a line mates; the UI also needs *what to show*.
+#[test]
+fn playback_walks_a_solve_to_checkmate() {
+    use shakmaty::Position as _;
+
+    let pos = common::pos(common::BRANCHING_LINEAR);
+    let steps = mate::playback(&pos, &common::line("f6g6 b1b8")).expect("this line mates");
+
+    // Kg6, a defense, Rb8#.
+    assert_eq!(steps.len(), 3);
+    assert!(steps.last().expect("non-empty").after.is_checkmate());
+}
+
+#[test]
+fn playback_stops_at_an_early_mate() {
+    let pos = common::pos(common::BACK_RANK);
+    let steps = mate::playback(&pos, &common::line("a1a8 a8a7 a7a6")).expect("mates on arrow 1");
+    assert_eq!(steps.len(), 1, "trailing arrows are never played");
+}
+
+#[test]
+fn playback_refuses_a_line_that_does_not_mate() {
+    let pos = common::pos(common::BACK_RANK);
+    assert_eq!(mate::playback(&pos, &common::line("a1a7")), None);
+}
+
+/// Whatever `playback` shows must be a real game: every move legal, ending mated.
+#[test]
+fn playback_produces_a_legal_game() {
+    use shakmaty::Position as _;
+
+    let pos = common::pos(common::LADDER);
+    let line = common::line("a1a7 b1b8");
+    let steps = mate::playback(&pos, &line).expect("mates");
+
+    let mut replay = pos.clone();
+    for step in &steps {
+        assert!(
+            replay.legal_moves().contains(&step.played),
+            "illegal move in playback"
+        );
+        replay.play_unchecked(step.played);
+        assert_eq!(
+            replay, step.after,
+            "recorded position disagrees with the replay"
+        );
+    }
+    assert!(replay.is_checkmate());
 }
 
 // ---------------------------------------------------------------------------

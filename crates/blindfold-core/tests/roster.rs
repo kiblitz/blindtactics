@@ -16,8 +16,7 @@ fn reads_a_position() {
 
 #[test]
 fn announces_the_side_to_move_first() {
-    // Same placement, Black to move.
-    let r = roster::of(&common::pos("6k1/5ppp/8/8/8/8/8/R5K1 b - - 0 1"));
+    let r = roster::of(&common::pos(common::BACK_RANK_IDLE));
     assert_eq!(r.to_move, shakmaty::Color::Black);
     assert_eq!(
         r.text(),

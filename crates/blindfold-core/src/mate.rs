@@ -31,18 +31,26 @@
 //! check) and unsound before it — it misses quiet keys and zugzwang mates
 //! entirely. Since a false positive here ships a broken puzzle, the search stays
 //! full-width.
+//!
+//! # Cost
+//!
+//! Both the frontier here and the search tree grow roughly 30x per ply. That is
+//! why [`judge`] is bounded (see [`Verdict::TooComplex`]) and why callers must
+//! not hand [`min_depth`] an unbounded budget — at depth 8 it does not finish.
 
 use crate::arrow;
+use crate::constants;
 use shakmaty::Position as _;
+use std::fmt;
 
 /// The result of playing a line out against every defense.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Verdict {
-    /// Mate against every defense, using `plies` of the submitted line.
+    /// Mate against every defense, using `moves` of the submitted line.
     ///
-    /// `plies` may be fewer than the line's length: if every defense is already
+    /// `moves` may be fewer than the line's length: if every defense is already
     /// mated, trailing arrows are simply never played.
-    Mates { plies: usize },
+    Mates { moves: usize },
     /// Some defense survives. `defense` is the opponent's replies that reach the
     /// refuting position, which is exactly what the UI should replay to show the
     /// user where their idea broke.
@@ -50,6 +58,13 @@ pub enum Verdict {
         defense: Vec<arrow::Arrow>,
         reason: Reason,
     },
+    /// The line was too long, or branched too widely, to judge within bounds.
+    ///
+    /// Deliberately not folded into [`Verdict::Refuted`], which would be a lie —
+    /// the line was not refuted, we simply declined to find out. No real puzzle
+    /// reaches this; it exists so a pathological submission fails honestly
+    /// instead of exhausting memory.
+    TooComplex { reason: Limit },
 }
 
 /// How a defense refuted a line.
@@ -66,18 +81,46 @@ pub enum Reason {
     Stalemate,
 }
 
+/// Which bound a submission blew.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Limit {
+    /// More arrows than [`constants::MAX_LINE`].
+    Length { moves: usize },
+    /// More live defenses than [`constants::MAX_FRONTIER`].
+    Frontier { branches: usize },
+}
+
 impl Verdict {
     pub fn mates(&self) -> bool {
         matches!(self, Verdict::Mates { .. })
     }
 }
 
-impl std::fmt::Display for Reason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for Reason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Reason::Illegal(a) => write!(f, "arrow {a} is illegal against some defense"),
             Reason::NoMate => write!(f, "some defense survives the line"),
             Reason::Stalemate => write!(f, "some defense reaches stalemate"),
+        }
+    }
+}
+
+impl fmt::Display for Limit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Limit::Length { moves } => {
+                write!(
+                    f,
+                    "line is {moves} moves long, over the limit of {}",
+                    constants::MAX_LINE
+                )
+            }
+            Limit::Frontier { branches } => write!(
+                f,
+                "{branches} live defenses, over the limit of {}",
+                constants::MAX_FRONTIER
+            ),
         }
     }
 }
@@ -94,11 +137,20 @@ struct Branch {
 /// whether a submitted attempt is correct, and it is the same one the curation
 /// tool uses to decide whether a puzzle is admissible — so the database and the
 /// app can never disagree about what "solved" means.
+///
+/// Bounded: see [`Verdict::TooComplex`]. Nothing caps how many arrows a user may
+/// draw, and the frontier grows ~30x per ply, so an unbounded judge is an
+/// out-of-memory abort waiting for a long submission.
 pub fn judge(start: &shakmaty::Chess, line: &[arrow::Arrow]) -> Verdict {
     if line.is_empty() {
         return Verdict::Refuted {
             defense: Vec::new(),
             reason: Reason::NoMate,
+        };
+    }
+    if line.len() > constants::MAX_LINE {
+        return Verdict::TooComplex {
+            reason: Limit::Length { moves: line.len() },
         };
     }
 
@@ -156,17 +208,83 @@ pub fn judge(start: &shakmaty::Chess, line: &[arrow::Arrow]) -> Verdict {
                     defense,
                 });
             }
+
+            if next.len() > constants::MAX_FRONTIER {
+                return Verdict::TooComplex {
+                    reason: Limit::Frontier {
+                        branches: next.len(),
+                    },
+                };
+            }
         }
 
         if next.is_empty() {
-            return Verdict::Mates { plies: ply + 1 };
+            return Verdict::Mates { moves: ply + 1 };
         }
         frontier = next;
     }
 
     // The final iteration either refutes or empties the frontier, so it always
-    // returns above.
+    // returns above: nothing is pushed to `next` past the `is_last` return.
     unreachable!("a non-empty line always resolves on its last ply")
+}
+
+/// One position reached while replaying a solved line, in order.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Step {
+    /// The move played to get here.
+    pub played: shakmaty::Move,
+    /// The position after it.
+    pub after: shakmaty::Chess,
+}
+
+/// Replay `line` against one concrete defense, for animating a solve.
+///
+/// [`judge`] answers *whether* a line mates; this answers *what to show*. The UI
+/// needs a single concrete sequence to animate, but a linear line generally has
+/// many defenses and they are all equally valid — so one is chosen, by taking the
+/// defender's first legal reply at each turn.
+///
+/// Which one hardly matters: by linearity, every defense ends in mate, so any
+/// choice makes a correct animation. Lives here rather than in the UI so that the
+/// playback path is testable without a browser.
+///
+/// Returns `None` if `line` does not mate from `start` — callers should have
+/// consulted [`judge`] first.
+pub fn playback(start: &shakmaty::Chess, line: &[arrow::Arrow]) -> Option<Vec<Step>> {
+    if !judge(start, line).mates() {
+        return None;
+    }
+
+    let mut pos = start.clone();
+    let mut steps = Vec::new();
+
+    for &a in line {
+        let mv = a
+            .resolve(&pos)
+            .expect("judge proved every arrow legal against every defense");
+        pos.play_unchecked(mv);
+        steps.push(Step {
+            played: mv,
+            after: pos.clone(),
+        });
+
+        if pos.is_checkmate() {
+            return Some(steps); // Trailing arrows are never played.
+        }
+
+        let reply = *pos
+            .legal_moves()
+            .first()
+            .expect("not mate, so a reply exists");
+        pos.play_unchecked(reply);
+        steps.push(Step {
+            played: reply,
+            after: pos.clone(),
+        });
+    }
+
+    unreachable!("a mating line reaches checkmate before running out of arrows")
 }
 
 /// Search for a linear mating line of **at most** `max_depth` solver moves.
@@ -180,6 +298,9 @@ pub fn judge(start: &shakmaty::Chess, line: &[arrow::Arrow]) -> Verdict {
 /// Returns the first line found. There may be others: two distinct linear mates
 /// of the same length is a "dual". Duals are harmless for correctness, since
 /// [`judge`] accepts any line that mates.
+///
+/// Cost grows ~30x per ply. `max_depth` above [`constants::MAX_DEPTH`] is not
+/// meaningfully bounded — do not expose it to untrusted input.
 pub fn find_linear(start: &shakmaty::Chess, max_depth: usize) -> Option<Vec<arrow::Arrow>> {
     search(std::slice::from_ref(start), max_depth)
 }
@@ -189,6 +310,10 @@ pub fn find_linear(start: &shakmaty::Chess, max_depth: usize) -> Option<Vec<arro
 /// Iterative deepening rather than one deep search, precisely because
 /// [`find_linear`] does not promise minimality. This is what stops a puzzle
 /// advertised as mate-in-4 from secretly being a mate-in-2.
+///
+/// The re-search is nearly free: the deepest iteration dominates so completely
+/// (~30x per level) that every shallower one together is a rounding error, which
+/// is also why no transposition table is warranted.
 pub fn min_depth(start: &shakmaty::Chess, max: usize) -> Option<usize> {
     (1..=max).find(|&d| find_linear(start, d).is_some())
 }
@@ -201,9 +326,13 @@ fn search(frontier: &[shakmaty::Chess], remaining: usize) -> Option<Vec<arrow::A
         return None;
     }
 
-    // An arrow must be legal in every frontier position, so the moves of any one
-    // of them are a superset of the candidates. Take the first as the generator
-    // and let `resolve` reject the rest.
+    // Candidates come from one frontier position. This is *not* a superset of the
+    // arrows legal in every position — `e1h1` is legal wherever `e1g1` is, yet
+    // only the canonical `e1g1` appears here, because `of_move` canonicalizes
+    // castles. It is nonetheless complete: both spellings resolve to the same
+    // `Move::Castle` in exactly the same positions, so probing the canonical one
+    // loses nothing. Do not "tighten" this into an intersection or a checks-only
+    // filter; either would be genuinely unsound.
     let candidates: Vec<arrow::Arrow> = frontier[0]
         .legal_moves()
         .iter()
@@ -211,14 +340,19 @@ fn search(frontier: &[shakmaty::Chess], remaining: usize) -> Option<Vec<arrow::A
         .collect();
 
     for a in candidates {
+        // Legality pre-pass before building anything. Most candidates are illegal
+        // in *some* frontier position, and materializing a whole child frontier
+        // only to discard it is the single biggest cost in the search — measured
+        // at ~79% of children built and thrown away without it.
+        if !frontier.iter().all(|pos| a.resolve(pos).is_ok()) {
+            continue;
+        }
+
         let mut next = Vec::new();
         let mut viable = true;
 
         for pos in frontier {
-            let Ok(mv) = a.resolve(pos) else {
-                viable = false;
-                break;
-            };
+            let mv = a.resolve(pos).expect("legality pre-pass just checked this");
             let mut after = pos.clone();
             after.play_unchecked(mv);
 
