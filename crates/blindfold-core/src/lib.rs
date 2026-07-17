@@ -13,6 +13,7 @@
 
 pub mod arrow;
 pub mod constants;
+pub mod lichess;
 pub mod mate;
 pub mod position;
 pub mod puzzle;

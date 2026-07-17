@@ -24,6 +24,21 @@ pub const PROMOTABLE: [shakmaty::Role; 4] = [
     shakmaty::Role::Knight,
 ];
 
+/// Columns a Lichess puzzle row must have before we will read it.
+///
+/// The real header is
+/// `PuzzleId,FEN,Moves,Rating,RatingDeviation,Popularity,NbPlays,Themes,GameUrl,OpeningTags`
+/// — ten columns. Eight is what we *need*: `Themes` is at index 7 and is the last
+/// field [`crate::lichess::Row`] reads, so a row missing only the trailing
+/// `GameUrl` / `OpeningTags` is still perfectly usable and should not be dropped.
+pub const LICHESS_MIN_COLUMNS: usize = 8;
+
+/// Prefix of the Lichess theme tag for mates: `mateIn1`, `mateIn2`, ...
+///
+/// A candidate filter only. The tag is not evidence that a line is linear, or even
+/// that it is the shortest mate — see [`crate::lichess`].
+pub const LICHESS_MATE_THEME_PREFIX: &str = "mateIn";
+
 /// The order pieces are announced in: the king anchors the position, then
 /// descending value.
 ///
