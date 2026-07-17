@@ -47,6 +47,106 @@ fn rejects_malformed_uci() {
         "e7e8k".parse::<arrow::Arrow>().is_err(),
         "cannot promote to a king"
     );
+    assert!(
+        "e7e8p".parse::<arrow::Arrow>().is_err(),
+        "cannot promote to a pawn"
+    );
+}
+
+/// Multi-byte input must be *rejected*, not panic.
+///
+/// The bug this pins: the length gate counted bytes while the parser sliced the
+/// `&str` at fixed byte offsets, so a 4-byte single char passed the gate and then
+/// split a codepoint. Every input below panicked before the fix.
+///
+/// This is not a curiosity. `Arrow` is `#[serde(try_from = "String")]`, so the
+/// panic reached `puzzle::of_jsonl` — a function that returns `Result` — and
+/// one bad byte in a committed database file would abort the whole wasm app
+/// instead of surfacing a parse error.
+#[test]
+fn rejects_multibyte_input_without_panicking() {
+    for s in [
+        "🙂", "中a", "é2é", "e€4", "€e4", "e2€", "e2eé", "😀4", "aé4", "中中",
+    ] {
+        assert!(
+            s.parse::<arrow::Arrow>().is_err(),
+            "{s:?} must parse to an error, not panic"
+        );
+    }
+}
+
+/// The length error should report what a human sees, not what the allocator does.
+#[test]
+fn length_error_counts_characters_not_bytes() {
+    match "中中".parse::<arrow::Arrow>() {
+        Err(arrow::ParseError::Length(n)) => assert_eq!(n, 2, "two characters, six bytes"),
+        other => panic!("expected a Length error, got {other:?}"),
+    }
+}
+
+/// UCI promotion suffixes are lowercase. Accepting uppercase would make parsing
+/// non-round-trip-stable, since `Display` always emits lowercase.
+#[test]
+fn rejects_uppercase_promotion() {
+    assert!(
+        "e7e8Q".parse::<arrow::Arrow>().is_err(),
+        "UCI promotions are lowercase"
+    );
+}
+
+/// An en-passant capture can never promote — it always lands on rank 3 or 6.
+///
+/// shakmaty's UCI resolution builds `Move::EnPassant` without consulting the
+/// promotion suffix, so `e5d6q` and `e5d6` resolved to the *same* move while
+/// comparing unequal as `Arrow`s. That directly contradicts this module's claim
+/// that an arrow is identified by `(from, to, promotion)` and nothing else, so
+/// the impossible suffix is rejected outright.
+#[test]
+fn rejects_a_promotion_suffix_on_an_en_passant_capture() {
+    let pos = common::pos("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1");
+    assert!(
+        common::a("e5d6").resolve(&pos).is_ok(),
+        "the plain e.p. capture is legal"
+    );
+    assert_eq!(
+        common::a("e5d6q").resolve(&pos),
+        Err(arrow::Error::Illegal),
+        "a promoting en-passant capture is not a thing"
+    );
+}
+
+/// The invariant the whole design leans on: resolving an arrow and reading the
+/// arrow back off the move is the identity.
+#[test]
+fn resolve_and_of_move_round_trip() {
+    for (fen, uci) in [
+        (common::BACK_RANK, "a1a8"),
+        (CASTLING, "e1g1"),
+        (CASTLING, "e1c1"),
+        ("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1", "e5d6"),
+        ("4k3/1P6/8/8/8/8/8/4K3 w - - 0 1", "b7b8q"),
+        ("4k3/1P6/8/8/8/8/8/4K3 w - - 0 1", "b7b8n"),
+    ] {
+        let pos = common::pos(fen);
+        let a = common::a(uci);
+        let m = a
+            .resolve(&pos)
+            .unwrap_or_else(|e| panic!("{uci} in {fen}: {e}"));
+        assert_eq!(
+            arrow::Arrow::of_move(&m),
+            Some(a),
+            "round trip broke for {uci} in {fen}"
+        );
+    }
+}
+
+/// A pawn reaching the back rank without a stated promotion is not a move. The
+/// UI must prompt for the piece rather than silently queening.
+#[test]
+fn promotion_requires_an_explicit_piece() {
+    let pos = common::pos("4k3/1P6/8/8/8/8/8/4K3 w - - 0 1");
+    assert_eq!(common::a("b7b8").resolve(&pos), Err(arrow::Error::Illegal));
+    assert!(common::a("b7b8q").resolve(&pos).is_ok());
 }
 
 // ---------------------------------------------------------------------------

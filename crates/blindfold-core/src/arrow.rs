@@ -18,18 +18,12 @@
 //! over `Move` equality, puzzles like the above would be wrongly rejected, and
 //! the app would wrongly refuse a correct answer. So: arrows are the identity,
 //! and they are *resolved* against a concrete position only when played.
+//!
+//! The invariant that makes this work is `of_move(resolve(a)) == a`, pinned by
+//! `tests/arrow.rs::resolve_and_of_move_round_trip`.
 
+use crate::constants;
 use std::fmt;
-use std::str::FromStr;
-
-/// Roles a pawn may promote to. Excludes king and pawn, which `Role::from_char`
-/// will happily hand back.
-const PROMOTABLE: [shakmaty::Role; 4] = [
-    shakmaty::Role::Queen,
-    shakmaty::Role::Rook,
-    shakmaty::Role::Bishop,
-    shakmaty::Role::Knight,
-];
 
 /// A drag from one square to another, optionally promoting.
 ///
@@ -91,6 +85,16 @@ impl Arrow {
     /// "castle", and the Lichess database emits the latter form in places (lila
     /// carries an `altCastles` table to undo it).
     pub fn resolve(self, pos: &shakmaty::Chess) -> Result<shakmaty::Move, Error> {
+        // shakmaty builds `Move::EnPassant` without consulting the promotion
+        // suffix, so `e5d6q` would otherwise resolve to the very same move as
+        // `e5d6` while comparing unequal as an `Arrow` — breaking this module's
+        // central claim that the triple is the identity. A capture that promotes
+        // must land on a back rank, so anything else carrying a suffix is
+        // rejected before delegating.
+        if self.promotion.is_some() && !self.lands_on_back_rank() {
+            return Err(Error::Illegal);
+        }
+
         shakmaty::uci::UciMove::Normal {
             from: self.from,
             to: self.to,
@@ -100,9 +104,11 @@ impl Arrow {
         .map_err(|_| Error::Illegal)
     }
 
-    /// Whether this arrow is legal in `pos`.
-    pub fn is_legal(self, pos: &shakmaty::Chess) -> bool {
-        self.resolve(pos).is_ok()
+    fn lands_on_back_rank(self) -> bool {
+        matches!(
+            self.to.rank(),
+            shakmaty::Rank::First | shakmaty::Rank::Eighth
+        )
     }
 
     /// The arrow a user would have drawn to play `m`.
@@ -138,35 +144,49 @@ impl fmt::Display for Arrow {
     }
 }
 
-impl FromStr for Arrow {
+impl std::str::FromStr for Arrow {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() != 4 && s.len() != 5 {
-            return Err(ParseError::Length(s.len()));
+        // Parsed over bytes throughout. Slicing the `&str` at fixed offsets
+        // panics on multi-byte input, because the arity check counts bytes while
+        // the slice indices are char boundaries — a 4-byte emoji passes the gate
+        // and then splits a codepoint. Matching on the byte slice makes the arity
+        // structural and removes the indices entirely.
+        match *s.as_bytes() {
+            [a, b, c, d] => Ok(Self {
+                from: square([a, b])?,
+                to: square([c, d])?,
+                promotion: None,
+            }),
+            [a, b, c, d, p] => Ok(Self {
+                from: square([a, b])?,
+                to: square([c, d])?,
+                promotion: Some(promotion(p)?),
+            }),
+            // Reported in characters, which is what the message promises and what
+            // a person counts.
+            _ => Err(ParseError::Length(s.chars().count())),
         }
-        let square = |t: &str| {
-            shakmaty::Square::from_ascii(t.as_bytes()).map_err(|_| ParseError::Square(t.to_owned()))
-        };
-        let from = square(&s[0..2])?;
-        let to = square(&s[2..4])?;
-        let promotion = match s.as_bytes().get(4) {
-            None => None,
-            Some(&c) => {
-                // `Role::from_char` accepts 'k' and 'p' too, which are not legal
-                // promotions, so the result is filtered rather than trusted.
-                let role = shakmaty::Role::from_char(c as char)
-                    .filter(|r| PROMOTABLE.contains(r))
-                    .ok_or(ParseError::Promotion(c as char))?;
-                Some(role)
-            }
-        };
-        Ok(Self {
-            from,
-            to,
-            promotion,
-        })
     }
+}
+
+fn square(bytes: [u8; 2]) -> Result<shakmaty::Square, ParseError> {
+    shakmaty::Square::from_ascii(&bytes)
+        .map_err(|_| ParseError::Square(String::from_utf8_lossy(&bytes).into_owned()))
+}
+
+fn promotion(byte: u8) -> Result<shakmaty::Role, ParseError> {
+    let c = byte as char;
+    // Two things `Role::from_char` will not do for us: it accepts 'k' and 'p',
+    // which are not promotable, and it accepts uppercase, which is not UCI and
+    // would make parsing non-round-trip-stable since `Display` emits lowercase.
+    if !byte.is_ascii_lowercase() {
+        return Err(ParseError::Promotion(c));
+    }
+    shakmaty::Role::from_char(c)
+        .filter(|r| constants::PROMOTABLE.contains(r))
+        .ok_or(ParseError::Promotion(c))
 }
 
 impl TryFrom<String> for Arrow {
