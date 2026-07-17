@@ -57,6 +57,9 @@ These were explicitly decided by the user. Do not reopen without asking.
   dexterity is multi-user and real-time and this is neither.
 - **Audio is designed-for, not built yet.** The roster is modeled as structured data,
   never a display string, so text / SVG / speech all render from one source.
+- **Curation gates on roster size, not just chess validity.** A puzzle is only usable
+  if a human can hold the position in their head. `MAX_ROSTER_SQUARES = 14`; see
+  "The roster gate" below for why 14 and not 10.
 
 ## Data source: the Lichess puzzle database
 
@@ -136,21 +139,38 @@ blindfold-chess-trainer/
 
 ### Current status
 
-- `blindfold-core` — built, 109 tests, clippy clean.
-- `blindfold-curate` — built, 18 tests + 1 `#[ignore]`d. Streams the dump, re-proves
-  every candidate, writes `database/*.jsonl`. The ignored one needs the 300 MB dump:
+- `blindfold-core` — built, 115 tests, clippy clean.
+- `blindfold-curate` — built, 34 tests + 1 `#[ignore]`d. Streams the dump, gates on
+  roster size and the halfmove clock, re-proves every candidate, writes
+  `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
 - `blindfold-web` — **not started. This is the next thing to build.**
 - `database/` — **400 puzzles, 100 per depth**, curated from the 2026-07-05 dump and
-  committed. Every one is re-proved by `crates/blindfold-curate/tests/database.rs`.
+  committed. Rosters run 4-14 squares, median 12-13. Every one is re-proved by
+  `crates/blindfold-curate/tests/database.rs`.
 - CI — **does not exist.** There is no `.github/`. Wherever this file says a check
   "runs in CI", read it as "is intended to, once CI exists".
 
 **`blindfold-curate` has both a lib and a bin target.** The lib is not there for
 reuse — nothing else links it — it exists so `tests/` can reach `constants`, `select`,
-and `dump`. An integration test cannot import a *binary* crate's modules, so without
-it `constants::PER_DEPTH` and the database test's idea of how many puzzles a file
-holds would be two numbers with nothing keeping them in step.
+`gather`, and `dump`. An integration test cannot import a *binary* crate's modules, so
+without it `constants::PER_DEPTH` and the database test's idea of how many puzzles a
+file holds would be two numbers with nothing keeping them in step.
+
+The corollary is worth stating because it was got wrong once: **anything left in
+`main.rs` cannot be tested.** `gather` — the prefilter, the theme match, the two reject
+gates, the early break — sat there while the far simpler `select` had a module and
+seven tests. The split must follow the risk. `main.rs` should hold argument handling,
+a thread pool, and a file writer, and nothing worth a test.
+
+### `blindfold-curate` modules
+
+- `dump` — walks zstd frames. **Read the module doc before touching it**; the obvious
+  simplification silently discards 97% of the file.
+- `gather` — streams rows to a candidate `Pool`, applying every gate that does not need
+  a search. Takes a reader, not a path, so it is tested against a dozen rows.
+- `select` — which verified puzzles to keep. Spreads across the rating range.
+- `constants` — policy: how many puzzles, how heavy, where they go.
 
 **The load-bearing architectural rule:** `blindfold-core` has no dependency on `web-sys`,
 `leptos`, or any I/O. It is tested with plain native `cargo test` — instant, no browser,
@@ -188,6 +208,37 @@ wrapper would only add a layer that could drift.
 Text rendering lives in `roster` (core) rather than the web crate because two consumers
 share it — plain text and, later, speech. SVG rendering belongs to the web crate, which is
 its only consumer. That is the line; it is not "no strings in core".
+
+### The roster gate — why curation filters on size
+
+Chess validity says nothing about whether a puzzle is *playable blindfold*, and the
+first cut of this database proved it: it shipped a mate-in-**one** with all 32 pieces
+on the board, rated 1029, whose roster ran to twelve lines. Median across the 400 was
+19 squares; 144 of them needed more than 20 memorized. That is not a puzzle, it is a
+memory test with a mate at the end.
+
+Worse, the rating axis steers *toward* the bad content. Low-rated mate-in-1s are
+disproportionately opening traps with full material, so the entry tier — where a new
+user meets the interface — was the heaviest of the four (16 puzzles ≥28 squares, versus
+zero at mate-in-4). Rating measures how hard a mate is to *find* when you can see the
+board; it is uncorrelated with, arguably anti-correlated with, how hard the position is
+to *carry*.
+
+So `gather` rejects on `roster::squares()`, and `each_puzzle_fits_in_a_head` in
+`tests/database.rs` holds the line. Result: median 12-13, max 14, min 4.
+
+**Why 14 and not 10.** 14 is an honest ceiling, not an ideal. Sparse positions are
+scarce, and mate-in-4 has the smallest pool to begin with: only ~10% of verified
+puzzles come in under 14, and a gate near 10 is simply not reachable at 100/depth.
+Lower it if the pool ever grows.
+
+**Measure the position the user is *shown*, not the row's FEN.** The row is a ply
+early, and its setup move may be a capture — `00AfZ` is 15 squares raw and 14 shown.
+The same rule applies to the halfmove clock, where it is worth one more sentence: a
+quiet setup move *advances* the clock, so the row's clock is one lower than the gate's
+input. CLAUDE.md's `C` is the clock at ply 0 of what the solver faces, i.e. the shown
+position. A test that sets the row's clock and asserts against the threshold directly
+is off by exactly one ply, and the first draft of `tests/gather.rs` was.
 
 ### The roster must carry everything that decides the answer
 
@@ -342,20 +393,12 @@ Prunings deliberately NOT added, with reasons:
   today that is held by `search_and_judge_agree` sampling rather than by construction. The
   suggested fix is to extract the advance generic over a `Trail` trait (`()` for search,
   `Vec<Arrow>` for judge, monomorphized away). Deferred, not rejected.
-- **Put the Lichess row -> `Puzzle` conversion in core, not in `blindfold-curate`** (flagged
-  at 55). CLAUDE.md calls the `FEN`-is-before-`Moves[0]` semantics the project's worst
-  footgun, and the rule here is "anything that can live in core, must". That conversion is
-  pure logic with no I/O, so on both counts it belongs in a `lichess` module in core, tested
-  by the fast native suite — rather than hand-rolled at the call site in the one crate with
-  no test culture yet. Do this **when building the curation tool**, not before; it is the
-  first thing that tool should reach for.
-- **Have the curation tool reject high-halfmove-clock candidates.** shakmaty has no 50-move
-  rule, so an all-quiet line from a source clock of **94+** gives the defender a claimable draw
-  the solver cannot see — rare rather than impossible, and a mate the defender can decline to
-  lose is not a mate. Rejecting on the clock alone is the cheap filter and it is what to build;
-  94 is derived in the roster-completeness section (and read the derivation before trusting the
-  number — it is not `100 - 7`). Belongs in curation, not `judge`, which must stay a function
-  of exactly what the roster carries.
+- **Sample candidates from the whole dump, not the front of it.** `gather` takes the first
+  `CANDIDATES_PER_DEPTH` matching rows in scan order. Lichess IDs are effectively random
+  w.r.t. rating, so this is a legitimate sample rather than a bias — but it is *assumed*
+  uncorrelated, not measured, and mate-in-4 now reads the whole file anyway without filling
+  its bucket. Low priority; the honest fix is to say "assumed" in `select.rs`'s doc or to
+  measure it once.
 - **`search` has no frontier bound while `judge` does** (flagged at 35). Currently safe:
   `MAX_DEPTH` caps `find_linear`'s frontier well under the bound, and the doc says not to
   hand it untrusted input. Worth closing anyway, since the two functions are documented as

@@ -24,14 +24,27 @@ pub const PROMOTABLE: [shakmaty::Role; 4] = [
     shakmaty::Role::Knight,
 ];
 
+/// Column indices in a Lichess puzzle row. The header is
+/// `PuzzleId,FEN,Moves,Rating,RatingDeviation,Popularity,NbPlays,Themes,GameUrl,OpeningTags`.
+///
+/// Named rather than spelled inline at the call site, so that
+/// [`LICHESS_MIN_COLUMNS`] can be *derived* from them instead of asserted next to
+/// them. The two are one fact — "how far into the row do we reach" — and when they
+/// were two, nothing kept them in step: setting the count to 7 by hand left every
+/// test passing while a 7-column row panicked on an out-of-bounds index instead of
+/// returning `Error::Columns`.
+pub const LICHESS_COL_ID: usize = 0;
+pub const LICHESS_COL_FEN: usize = 1;
+pub const LICHESS_COL_MOVES: usize = 2;
+pub const LICHESS_COL_RATING: usize = 3;
+pub const LICHESS_COL_THEMES: usize = 7;
+
 /// Columns a Lichess puzzle row must have before we will read it.
 ///
-/// The real header is
-/// `PuzzleId,FEN,Moves,Rating,RatingDeviation,Popularity,NbPlays,Themes,GameUrl,OpeningTags`
-/// — ten columns. Eight is what we *need*: `Themes` is at index 7 and is the last
-/// field [`crate::lichess::Row`] reads, so a row missing only the trailing
-/// `GameUrl` / `OpeningTags` is still perfectly usable and should not be dropped.
-pub const LICHESS_MIN_COLUMNS: usize = 8;
+/// Ten exist; this is what we *need*. `Themes` is the last field
+/// [`crate::lichess::Row`] reads, so a row missing only the trailing `GameUrl` /
+/// `OpeningTags` is still perfectly usable and should not be dropped.
+pub const LICHESS_MIN_COLUMNS: usize = LICHESS_COL_THEMES + 1;
 
 /// Prefix of the Lichess theme tag for mates: `mateIn1`, `mateIn2`, ...
 ///

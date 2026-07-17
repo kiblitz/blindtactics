@@ -11,6 +11,7 @@
 
 mod common;
 
+use blindfold_core::constants;
 use blindfold_core::lichess;
 use blindfold_core::mate;
 use blindfold_core::position;
@@ -227,6 +228,40 @@ fn rejects_a_short_row() {
         lichess::Row::of_csv("a,b,c"),
         Err(lichess::Error::Columns { got: 3 })
     ));
+}
+
+/// The arity gate must sit exactly where the indices need it. A row one column short
+/// is the interesting case — three columns is nowhere near the boundary and would pass
+/// even with the gate set too low, while the row that is one short would *panic* on an
+/// out-of-bounds index rather than return `Error::Columns`.
+#[test]
+fn rejects_a_row_one_column_short_rather_than_panicking() {
+    let one_short: String = std::iter::repeat_n("x", constants::LICHESS_MIN_COLUMNS - 1)
+        .collect::<Vec<_>>()
+        .join(",");
+    assert!(matches!(
+        lichess::Row::of_csv(&one_short),
+        Err(lichess::Error::Columns { .. })
+    ));
+}
+
+/// The gate and the indices are one fact. Pinned so the count cannot be edited to
+/// something the reads would run past.
+#[test]
+fn the_column_gate_covers_every_column_that_is_read() {
+    for index in [
+        constants::LICHESS_COL_ID,
+        constants::LICHESS_COL_FEN,
+        constants::LICHESS_COL_MOVES,
+        constants::LICHESS_COL_RATING,
+        constants::LICHESS_COL_THEMES,
+    ] {
+        assert!(
+            index < constants::LICHESS_MIN_COLUMNS,
+            "column {index} is read but a row of {} columns would be accepted",
+            constants::LICHESS_MIN_COLUMNS
+        );
+    }
 }
 
 #[test]

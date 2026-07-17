@@ -22,9 +22,13 @@ pub fn by_rating_spread(mut puzzles: Vec<puzzle::Puzzle>, want: usize) -> Vec<pu
     // out, and a regeneration diffs cleanly instead of churning.
     puzzles.sort_by(|a, b| a.rating.cmp(&b.rating).then_with(|| a.id.cmp(&b.id)));
 
-    // `want == 0` is checked first and separately. Folded into the `len() <= want`
-    // branch it reads as harmless and inverts the function: asking for no puzzles
-    // returns every puzzle.
+    // Explicit rather than emergent. The loop below would return empty for `want == 0`
+    // on its own — `0..0` never runs — so this guard is belt and braces, not the fix.
+    //
+    // It is here because of what the *original* spelling did: `len() <= want ||
+    // want == 0` shared one branch, and `want == 0` reached `return puzzles`, so
+    // asking for no puzzles returned every puzzle. Written out separately, that
+    // reading is impossible.
     if want == 0 {
         return Vec::new();
     }

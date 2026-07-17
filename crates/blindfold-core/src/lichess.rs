@@ -110,11 +110,11 @@ impl<'a> Row<'a> {
             return Err(Error::Columns { got: f.len() });
         }
         Ok(Self {
-            id: f[0],
-            fen: f[1],
-            moves: f[2],
-            rating: f[3],
-            themes: f[7],
+            id: f[constants::LICHESS_COL_ID],
+            fen: f[constants::LICHESS_COL_FEN],
+            moves: f[constants::LICHESS_COL_MOVES],
+            rating: f[constants::LICHESS_COL_RATING],
+            themes: f[constants::LICHESS_COL_THEMES],
         })
     }
 
