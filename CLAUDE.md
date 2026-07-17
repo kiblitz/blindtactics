@@ -110,7 +110,7 @@ blindfold-chess-trainer/
 
 ### Current status
 
-- `blindfold-core` — built, 77 tests, clippy clean.
+- `blindfold-core` — built, 78 tests, clippy clean.
 - `blindfold-curate` — **not started. This is the next thing to build.**
 - `blindfold-web` — not started.
 - `database/` — **does not exist.** Nothing has been curated yet.
@@ -183,8 +183,9 @@ filter for uniqueness. Minimality (`min_depth`) is still enforced, because that 
 - `find_linear(pos, d)` means "at most `d`", not "exactly `d`" — when every defense is
   already mated the recursion bottoms out early and returns a shorter line. `min_depth`
   iteratively deepens for exactly this reason.
-- **`Move::to()` for en passant ignores the promotion suffix.** shakmaty builds
-  `Move::EnPassant` without consulting it, so `e5d6q` and `e5d6` resolve to the same move.
+- **`UciMove::to_move` ignores the promotion suffix on an en-passant capture.**
+  `Move::EnPassant { from, to }` has no promotion field to put it in, so `e5d6q` and `e5d6`
+  resolve to the same move while comparing unequal as `Arrow`s.
   `arrow::resolve` rejects a suffix on a non-back-rank target to keep the identity honest.
 - **Cargo's `[profile.dev.package."*"]` matches dependencies only, never workspace
   members.** Each member needs its own stanza or it stays at opt-level 0 — worth 3.5x on
@@ -241,9 +242,9 @@ is what makes iterating on the UI safe.
   before adding more.
 - Bug reported => reproduce as a failing test **first**, then fix. Same commit.
 
-The two fixtures that matter most are `BRANCHING_LINEAR` and `BRANCHING_BLOCKED`: the
-same shape, one piece moved. The first is linear despite five defenses; the second is not,
-because Black can interpose. Together they are what "linear" does and does not mean.
+The two fixtures that matter most are `BRANCHING_LINEAR` and `BRANCHING_BLOCKED`: the same
+shape, with Black's a7 pawn swapped for a rook and the c7 pawn dropped. The first is linear
+despite five defenses; the second is not, because Black can interpose. Together they are what "linear" does and does not mean.
 
 Traps already encoded as tests (do not regress these):
 
@@ -277,12 +278,17 @@ There is no `docs/` directory. If design notes outgrow this file, create one.
 Linearity survival rate — the fraction of Lichess `mateInN` puzzles whose stored line is
 actually linear. Sampled from ~59k real puzzles pulled from the live dump:
 
-| depth | pool (approx) | linear | usable (approx) |
+| depth | pool (approx) | linear (±1pp) | usable (approx) |
 |---|---|---|---|
-| mateIn1 | 845k | 100% | 845k |
+| mateIn1 | 845k | 100%* | 845k |
 | mateIn2 | 824k | 93.8% | 773k |
 | mateIn3 | 162k | 61.4% | 99k |
 | mateIn4 | 32k | 34.8% | 11k |
+
+\* Not a measurement. A mate-in-1 is linear by construction — the solver's single arrow is
+the first ply, so no defense precedes it and there is nothing to branch. It cannot drift.
+The other three are sample estimates; treat mateIn4 in particular as "about a third", not
+as 34.8%.
 
 This retires the one risk that could have invalidated the whole design: mate-in-4 is the
 tight tier, and ~11k usable puzzles against a target of ~100 is ample.

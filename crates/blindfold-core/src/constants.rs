@@ -1,4 +1,16 @@
 //! Named constants for the core crate.
+//!
+//! This is a *category* module, not a concept module, and it is that way on
+//! purpose. Nothing in here is shared between modules — `MAX_LINE` and
+//! `MAX_FRONTIER` belong to `mate`, `MAX_DEPTH` to `puzzle`, `PROMOTABLE` to
+//! `arrow` — so grouping them by "is a constant" rather than by what they are
+//! about cuts against how the rest of the crate is organised. It is done anyway
+//! because the project's standing rule is that constants live in a dedicated
+//! constants module, and a rule followed unevenly is worse than either choice
+//! made consistently: the moment some constants live here and others live next to
+//! their use site, "where does this go?" becomes a judgement call on every commit.
+//! Reviewers reach for this file periodically — the answer is that it is settled,
+//! not overlooked.
 
 /// Roles a pawn may promote to.
 ///
@@ -43,7 +55,8 @@ pub const MAX_LINE: usize = 8;
 
 /// Ceiling on live defenses tracked while judging a line.
 ///
-/// Measured: an unrefuted line reaches ~30M branches (~5 GiB) within about six
-/// seconds, which is past wasm32's 4 GB address space. ~1M branches is roughly
-/// 150 MB, the most a browser heap should be asked to absorb.
+/// A branch is a `(Chess, Vec<Arrow>)`, measured at 160 bytes plus the `Vec`'s
+/// heap. An unrefuted line reaches ~30M of them — over 4.8 GiB, past wasm32's
+/// whole 4 GB address space — within about six seconds. This cap puts the ceiling
+/// near 170 MB, about the most a browser heap should be asked to absorb.
 pub const MAX_FRONTIER: usize = 1 << 20;

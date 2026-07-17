@@ -33,8 +33,8 @@ pub fn a(uci: &str) -> arrow::Arrow {
 // Positions
 //
 // Each is hand-built to isolate one property. The two BRANCHING_* positions are
-// the same idea with one pawn moved, and they are the heart of the suite: they
-// are what "linear" does and does not mean.
+// the same idea with Black's a7 pawn swapped for a rook, and they are the heart
+// of the suite: they are what "linear" does and does not mean.
 // ---------------------------------------------------------------------------
 
 /// White Kf6, Rb1; Black Kh8, pawns a7 c7. White to move.
@@ -52,8 +52,9 @@ pub const BRANCHING_LINEAR: &str = "7k/p1p5/5K2/8/8/8/8/1R6 w - - 0 1";
 
 /// White Kf6, Rb1; Black Kh8, rook a7. White to move.
 ///
-/// The same shape as [`BRANCHING_LINEAR`], but Black has a rook that can reach
-/// the b-file. Now `Kg6` `Rb8#` is NOT linear: Black answers `Rb7`, which blocks
+/// The same shape as [`BRANCHING_LINEAR`], but Black's a7 pawn is now a rook, so
+/// it can reach the b-file. (The c7 pawn goes too — it only ever existed to pad
+/// out the defense count over there.) Now `Kg6` `Rb8#` is NOT linear: Black answers `Rb7`, which blocks
 /// the file and makes the second arrow flatly illegal.
 ///
 /// This is the most important negative test in the project. Against the *king
@@ -81,8 +82,10 @@ pub const LADDER: &str = "7k/8/8/8/8/8/8/RR4K1 w - - 0 1";
 /// move. The classic mate-solver bug is treating "no legal moves" as a win; this
 /// position catches it.
 ///
-/// The queen sits on g7 rather than somewhere closer because it needs a straight
-/// line to *both* b7 and c7, and the rank is the only one that offers both.
+/// The queen sits on g7 because it needs a straight line to *both* b7 and c7
+/// while leaving Ka8 unchecked and staying off the squares the white king wants.
+/// The 7th rank is what survives those constraints — b6/b8/c6/c8 also see both
+/// squares, but each one either checks a8 already or collides with Kb6.
 pub const STALEMATE_TRAP: &str = "k7/6Q1/1K6/8/8/8/8/8 w - - 0 1";
 
 /// White Ra1, Kg1; Black Kg8, pawns f7 g7 h7. White to move. `Ra8#`.

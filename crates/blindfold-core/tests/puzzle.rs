@@ -7,6 +7,7 @@
 
 mod common;
 
+use blindfold_core::constants;
 use blindfold_core::puzzle;
 
 fn good() -> puzzle::Puzzle {
@@ -74,7 +75,7 @@ fn rejects_a_depth_that_disagrees_with_the_solution() {
 /// to be guarding the database.
 #[test]
 fn rejects_a_depth_outside_the_supported_range() {
-    for depth in [0, blindfold_core::constants::MAX_DEPTH + 1, 12, usize::MAX] {
+    for depth in [0, constants::MAX_DEPTH + 1, 12, usize::MAX] {
         let p = puzzle::Puzzle { depth, ..good() };
         assert!(
             matches!(p.verify(), Err(puzzle::Invalid::DepthOutOfRange { .. })),

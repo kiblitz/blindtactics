@@ -4,6 +4,9 @@ mod common;
 
 use blindfold_core::constants;
 use blindfold_core::mate;
+// Trait import, so `as _`: shakmaty's board queries are trait methods and Rust has
+// no way to reach them via a module path. Nothing here refers to the name.
+use shakmaty::Position as _;
 
 #[test]
 fn back_rank_mate_in_one() {
@@ -60,8 +63,6 @@ fn linear_line_mates_through_a_branch() {
 /// the test above is actually exercising a branch rather than a forced sequence.
 #[test]
 fn linear_fixture_really_branches() {
-    use shakmaty::Position as _;
-
     let mut pos = common::pos(common::BRANCHING_LINEAR);
     let key = common::a("f6g6").resolve(&pos).expect("Kg6 is legal");
     pos.play_unchecked(key);
@@ -97,8 +98,6 @@ fn a_line_that_fails_one_defense_is_refuted() {
 /// through an occupied square.
 #[test]
 fn arrow_is_illegal_against_a_blocking_defense() {
-    use shakmaty::Position as _;
-
     let mut pos = common::pos(common::BRANCHING_BLOCKED);
     for uci in ["f6g6", "a7b7"] {
         let m = common::a(uci).resolve(&pos).expect("legal");
@@ -118,8 +117,6 @@ fn arrow_is_illegal_against_a_blocking_defense() {
 /// cherry-picked defense, and is still unusable.
 #[test]
 fn a_single_defense_can_hide_non_linearity() {
-    use shakmaty::Position as _;
-
     let mut pos = common::pos(common::BRANCHING_BLOCKED);
     for uci in ["f6g6", "h8g8"] {
         let m = common::a(uci).resolve(&pos).expect("legal");
@@ -307,11 +304,34 @@ fn a_runaway_frontier_is_reported_not_exhausted() {
     }
 }
 
-/// `TooComplex` must never be mistaken for a solve.
+/// `TooComplex` must never be mistaken for a solve — nor for a failure.
+///
+/// `mates()` and `refuted()` are deliberately not complements, and this is the
+/// verdict that proves it: giving up is a third answer. A UI that reached for
+/// `!mates()` to mean "wrong" would accuse the user of missing a mate we simply
+/// declined to look for, and they cannot see the board to know better.
 #[test]
-fn too_complex_does_not_count_as_mating() {
+fn too_complex_is_neither_a_mate_nor_a_refutation() {
     let line: Vec<_> = std::iter::repeat_n(common::a("a1a8"), constants::MAX_LINE + 1).collect();
-    assert!(!mate::judge(&common::pos(common::BACK_RANK), &line).mates());
+    let v = mate::judge(&common::pos(common::BACK_RANK), &line);
+    assert!(!v.mates(), "we never proved a mate");
+    assert!(!v.refuted(), "and we never found a defense either");
+}
+
+/// The other half: for every verdict that is not `TooComplex`, the two really are
+/// complements. Without this, `refuted()` could be stubbed `false` and the test
+/// above would still pass.
+#[test]
+fn a_decided_verdict_is_exactly_one_of_mates_or_refuted() {
+    let pos = common::pos(common::BACK_RANK);
+    for uci in ["a1a8", "a1a7", "e4e5"] {
+        let v = mate::judge(&pos, &common::line(uci));
+        assert_ne!(
+            v.mates(),
+            v.refuted(),
+            "{uci}: judge reached a verdict, so exactly one must hold; got {v:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -321,8 +341,6 @@ fn too_complex_does_not_count_as_mating() {
 /// `judge` says *whether* a line mates; the UI also needs *what to show*.
 #[test]
 fn playback_walks_a_solve_to_checkmate() {
-    use shakmaty::Position as _;
-
     let pos = common::pos(common::BRANCHING_LINEAR);
     let steps = mate::playback(&pos, &common::line("f6g6 b1b8")).expect("this line mates");
 
@@ -347,8 +365,6 @@ fn playback_refuses_a_line_that_does_not_mate() {
 /// Whatever `playback` shows must be a real game: every move legal, ending mated.
 #[test]
 fn playback_produces_a_legal_game() {
-    use shakmaty::Position as _;
-
     let pos = common::pos(common::LADDER);
     let line = common::line("a1a7 b1b8");
     let steps = mate::playback(&pos, &line).expect("mates");

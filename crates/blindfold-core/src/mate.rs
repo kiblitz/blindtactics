@@ -94,6 +94,18 @@ impl Verdict {
     pub fn mates(&self) -> bool {
         matches!(self, Verdict::Mates { .. })
     }
+
+    /// Whether some defense actually refutes the line.
+    ///
+    /// The counterpart to [`Verdict::mates`], and not its negation — which is the
+    /// whole point of having it. `!v.mates()` is true for [`Verdict::TooComplex`]
+    /// too, so a caller reaching for the obvious `if !v.mates() { wrong() }` would
+    /// tell the user they were wrong when all we did was decline to find out.
+    /// That is the exact lie [`Verdict::TooComplex`] exists to avoid, so the
+    /// natural spelling of "they got it wrong" needs to be the correct one.
+    pub fn refuted(&self) -> bool {
+        matches!(self, Verdict::Refuted { .. })
+    }
 }
 
 impl fmt::Display for Reason {

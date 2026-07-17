@@ -13,6 +13,10 @@
 
 mod common;
 
+// Trait import, so `as _`: shakmaty's board queries are trait methods and Rust has
+// no way to reach them via a module path. Nothing here refers to the name.
+use shakmaty::Position as _;
+
 use blindfold_core::arrow;
 use blindfold_core::mate;
 
@@ -72,8 +76,6 @@ fn a_promotion_arrow_without_a_piece_is_illegal() {
 
 #[test]
 fn of_move_round_trips_every_promotion_piece() {
-    use shakmaty::Position as _;
-
     let pos = common::pos(common::UNDERPROMOTION);
     let mut seen = Vec::new();
     for m in pos.legal_moves().iter() {
@@ -158,8 +160,6 @@ fn finds_a_mate_delivered_by_en_passant() {
 /// bug.
 #[test]
 fn one_arrow_is_an_en_passant_capture_or_an_ordinary_one() {
-    use shakmaty::Position as _;
-
     let start = common::pos("8/1p6/Q7/P7/8/8/8/k1K5 b - - 0 1");
     let a = common::a("a5b6");
 
@@ -210,8 +210,6 @@ fn an_en_passant_arrow_is_not_linear_when_only_one_defense_allows_it() {
 /// solver that assumed the solver is White.
 #[test]
 fn solves_a_position_where_black_is_the_solver() {
-    use shakmaty::Position as _;
-
     let pos = common::pos(common::BACK_RANK_BLACK);
     assert_eq!(pos.turn(), shakmaty::Color::Black, "fixture sanity");
     assert_eq!(mate::find_linear(&pos, 1), Some(common::line("a8a1")));
