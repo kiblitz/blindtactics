@@ -658,9 +658,91 @@ body {
   color: var(--on-amber);
 }
 
+/* A square control that carries a glyph rather than a word — the flip toggle and
+ * the settings gear. */
+.button--icon {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* A pressed/active toggle button — the flip while the board is flipped — in the
+ * same amber the other `--on` states use (`settings__option--on`, etc.). */
+.button--on {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
 :focus-visible {
   outline: 2px solid var(--teal);
   outline-offset: 2px;
+}
+
+/* ---- board bar (view controls) ---------------------------------------- */
+
+.boardbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+/* The settings gear anchors its dropdown to itself, which then floats over the
+ * board rather than shoving it down when opened. */
+.settings {
+  position: relative;
+}
+
+.settings__menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  z-index: 5;
+  min-width: 10rem;
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--slate);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.settings__heading {
+  margin: 0 0 0.4rem;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--chalk-faint);
+}
+
+.settings__option {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--chalk);
+  font: inherit;
+  font-size: 0.83rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.settings__option:hover {
+  color: var(--amber);
+}
+
+/* The chosen POV sits pressed, so the current preference reads at a glance. */
+.settings__option--on {
+  border-color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 15%, transparent);
+  color: var(--amber);
 }
 
 /* ---- verdict ----------------------------------------------------------- */

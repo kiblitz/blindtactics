@@ -5,6 +5,7 @@
 //! `localStorage`, and they are as thin as the binding allows.
 
 use crate::constants;
+use crate::storage;
 
 /// The outcome of the first submission on a puzzle — the only one that scores.
 ///
@@ -51,8 +52,7 @@ pub fn update(user: u32, puzzle: u32, outcome: Outcome) -> u32 {
 /// corrupt key is not something the user can act on, and starting fresh is the
 /// right recovery.
 pub fn load() -> u32 {
-    storage()
-        .and_then(|s| s.get_item(constants::ELO_STORAGE_KEY).ok().flatten())
+    storage::read(constants::ELO_STORAGE_KEY)
         .and_then(|raw| raw.parse::<u32>().ok())
         .map_or(constants::ELO_START, |r| {
             r.clamp(constants::ELO_FLOOR, constants::ELO_CEILING)
@@ -63,11 +63,5 @@ pub fn load() -> u32 {
 /// storage disabled): the rating then simply does not survive a reload, which is a
 /// graceful degradation rather than a failure worth interrupting the user over.
 pub fn save(rating: u32) {
-    if let Some(s) = storage() {
-        let _ = s.set_item(constants::ELO_STORAGE_KEY, &rating.to_string());
-    }
-}
-
-fn storage() -> Option<web_sys::Storage> {
-    web_sys::window()?.local_storage().ok().flatten()
+    storage::write(constants::ELO_STORAGE_KEY, &rating.to_string());
 }

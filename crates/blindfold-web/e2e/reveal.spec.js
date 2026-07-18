@@ -320,3 +320,41 @@ test("a last-rank move that is not a promotion can still be entered", async ({ p
 
   expect(errors).toEqual([]);
 });
+
+// The point-of-view setting and the flip button both re-orient the board — a
+// reactive concern a native test cannot see: it drives the real settings menu and
+// flip control and reads the board's own top-left `data-square` to confirm the
+// re-render actually happened. White/Black are puzzle-independent (a8 / h1 in the
+// corner whatever the solver is), so no puzzle needs pinning. The reload asserts the
+// split the design rests on: the POV persists to localStorage, the flip does not.
+test("the POV setting and flip control re-orient the board", async ({ page }) => {
+  const errors = collectErrors(page);
+
+  await page.goto("/");
+  await expect(page.locator(".board")).toBeVisible();
+  const topLeft = () => page.locator(".square").first().getAttribute("data-square");
+
+  // POV = White: white's a8 is the top-left corner.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("menuitemradio", { name: "White" }).click();
+  await expect.poll(topLeft).toBe("a8");
+
+  // POV = Black: the board mirrors through both axes, so h1 is top-left.
+  await page.getByRole("menuitemradio", { name: "Black" }).click();
+  await expect.poll(topLeft).toBe("h1");
+
+  // Flip inverts the current view back to white-at-bottom, without touching the POV.
+  await page.getByRole("button", { name: "Flip board" }).click();
+  await expect.poll(topLeft).toBe("a8");
+  await expect(page.getByRole("button", { name: "Flip board" })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
+
+  // Reload: the POV (Black) persisted, the transient flip did not — so h1 again.
+  await page.reload();
+  await expect(page.locator(".board")).toBeVisible();
+  await expect.poll(topLeft).toBe("h1");
+
+  expect(errors).toEqual([]);
+});

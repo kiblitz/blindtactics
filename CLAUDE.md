@@ -141,11 +141,12 @@ blindfold-chess-trainer/
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 52 tests (+ 3 Playwright tests in one spec, run as 4
+- `blindfold-web` — built, 57 tests (+ 4 Playwright tests in one spec, run as 5
   cases — the reveal test runs on two pinned puzzles), clippy clean. Blank board,
   drag-drawn numbered arrows each in its own colour, roster panel with real piece
-  artwork, a per-move promotion control, a hover highlight, submit, and a static
-  reveal stepped through by
+  artwork, a per-move promotion control, a hover highlight, a board flip and a
+  settings menu whose one setting is the point of view (to move / white / black),
+  submit, and a static reveal stepped through by
   hand (◀/▶, Lichess-analysis style — no timer, no auto-advancing animation; the
   board still fades in on reveal). The puzzle is never
   labelled with its mate depth; puzzles are drawn at random from a pool near the
@@ -204,9 +205,9 @@ a thread pool, and a file writer, and nothing worth a test.
 no toolchain. Anything that can live in core, must.
 
 The web crate should contain almost no logic worth testing *in its components*. That it has
-52 tests anyway is not a contradiction: they cover `square`, `session`, `rating` and
-`database`, the crate's Leptos-free parts, which is exactly where its logic was pushed so a
-native test could reach it. The rule bites on `board`/`panel`/`line`/`app` — if a test wants
+57 tests anyway is not a contradiction: they cover `square`, `session`, `rating`, `settings`
+and `database`, the crate's Leptos-free parts, which is exactly where its logic was pushed so
+a native test could reach it. The rule bites on `board`/`panel`/`line`/`app` — if a test wants
 to reach into one of those, the thing it wants is in the wrong module.
 
 This matters three ways: the test suite stays fast; the same solver is shared by the
@@ -254,9 +255,11 @@ its only consumer. That is the line; it is not "no strings in core".
   exclude, r)` is the adaptive picker — sort by rating distance, take the nearest
   `SELECTION_POOL`, index by a caller-supplied random `r` — a pure function so the app
   supplies `Math::random()` and a native test supplies a fixed number. `Attempt {
-  arrows, solve, ply, scored }` is *this* attempt: draw/undo/clear/set_promotion
+  arrows, solve, ply, scored, flipped }` is *this* attempt: draw/undo/clear/set_promotion
   (which takes `Option<Role>`, so "no promotion" is a real value the per-move control
-  sets, not the absence of a call), `submit` (one `judge` call, returns `Some(Outcome)`
+  sets, not the absence of a call), `flip` (the transient per-puzzle board flip, cleared
+  by `reset` alongside the line — see "Which way the board faces" below),
+  `submit` (one `judge` call, returns `Some(Outcome)`
   only on the first scoring submission so a miss-then-solve cannot re-score), and the
   manual reveal cursor
   (`step_back`/`step_forward`/`can_step_back`/`can_step_forward`, plus `step_at` for
@@ -265,6 +268,17 @@ its only consumer. That is the line; it is not "no strings in core".
 - `rating` — the Elo update (`update(user, puzzle, Outcome)`), and `load`/`save` over
   `localStorage`. The arithmetic is pure and native-tested; only the storage I/O needs
   a browser, and it is the only thing here that touches one.
+- `settings` — the persisted display preferences. One for now: `Pov` (`ToMove` / `White`
+  / `Black`), which side faces the user. `Pov::side(solver)` resolves it against who is to
+  move, and `facing(pov, solver, flipped)` layers the transient per-puzzle flip on top —
+  both pure and native-tested (the flip's *sign* especially, the same care `square` takes);
+  only `load`/`save` touch storage. `facing`, not `orientation`, so the call site reads
+  `square::Orientation(settings::facing(..))` rather than repeating the word. See "Which way
+  the board faces" below.
+- `storage` — the one `localStorage` seam (`read(key)` / `write(key, value)`), shared by
+  `rating` and `settings` so the fallible steps to reach it — and the `get_item`/`set_item`
+  that can itself fail — are not open-coded twice. The `window().local_storage()` handle is
+  private to the module; callers deal only in a key and an `Option<String>`.
 - `database` — the committed JSONL, `include_str!`d.
 - `board`, `panel`, `line`, `app` — components. Markup and event plumbing only.
 - `pieces` — Cburnett's artwork, taken from lila (GPLv2-or-later, so compatible with our
@@ -278,8 +292,8 @@ import a binary crate's modules. `main.rs` mounts the app and does nothing else.
 **Leptos's prelude is glob-imported** in the component modules, against the global
 no-wildcard rule. `view!` needs a large set of traits and types in scope and Leptos is
 built around it; this is the same exception the OCaml rules make for `Core`. The
-non-component modules (`square`, `session`, `rating`, `database`, `pieces`, `constants`)
-do not import it at all, which is the line worth holding.
+non-component modules (`square`, `session`, `rating`, `settings`, `storage`, `database`,
+`pieces`, `constants`) do not import it at all, which is the line worth holding.
 
 ### The browser is the only place some bugs exist
 
@@ -304,7 +318,9 @@ CI. It draws a real solution, submits, steps all the way back to the empty start
 lit, pieces still shown), then one step forward, and asserts the first move re-lights — a
 reveal that did not actually move fails both halves. A third test guards that a last-rank
 non-pawn move is still enterable now that promotion is a per-move control (see "Promotion"
-below).
+below), and a fourth that the settings POV and the flip button actually re-orient the board
+and that the POV persists across a reload while the flip does not (see "Which way the board
+faces" below).
 
 **Two e2e traps this cost real time on, both about the *harness*, not the app.** First,
 the board is an `aspect-ratio: 1` box below the masthead, so at Playwright's default 720px
@@ -373,6 +389,35 @@ rating change, no latch) and the panel phrases as a neutral hint to pick a piece
 move sharing it lands here too — the safe direction (never penalise an ambiguous illegal
 input), and the hint's "*if* a pawn makes that move…" wording stays honest either way. Pinned
 by `session.rs`'s `an_unfinished_promotion_is_not_scored_and_does_not_latch`.
+
+### Which way the board faces — a persistent POV plus a transient flip
+
+Two controls, deliberately different in lifetime. The **POV setting** (in the settings
+menu, `settings::Pov`) is a persisted preference — `To move` (the default; the solver's
+side faces the user, as it always had), `White`, or `Black`. The **flip button** is a
+per-puzzle toggle that inverts whatever the POV resolved to, and **resets on the next
+puzzle**. This split was the user's explicit choice: a stuck flip should not silently ride
+along across puzzles, but a chosen POV should.
+
+The lifetimes decide where each lives. `Pov` is persisted, so it is in `settings`
+(load/save over `localStorage`, like the rating). The flip is per-puzzle, so it is a field
+on `session::Attempt` — the value that already resets per puzzle — cleared by
+`Attempt::reset` alongside the line and the scored flag, so it cannot drift out of step
+with them. It is deliberately **not** locked once solved (unlike draw/undo/clear): flipping
+to read the revealed mate from the other side is exactly when you want it.
+
+Orientation is then `square::Orientation(settings::facing(pov, solver, flipped))` — the pure
+`facing` resolves which side sits at the bottom (native-tested for the flip's *sign*, the same
+reason the rest of the board geometry lives in `square`), and is named `facing` rather than
+`orientation` so the call site does not read `Orientation(orientation(..))`. `app` feeds it a `flipped` **`Memo`**, not a raw `attempt` read: reading the
+attempt directly in the board's render would resubscribe the board to every arrow edit and
+rebuild it (dropping an in-progress drag) on each one. The board's keyed render still calls
+`puzzle.track()` even though orientation already depends on the solver — two different
+puzzles can resolve to the *same* orientation, and without the track the board would carry
+the previous puzzle's drag into the next. The reactive re-orientation (does clicking the
+control actually redraw the board) is a browser-only concern, so it is pinned by
+`reveal.spec.js`'s `the POV setting and flip control re-orient the board`, which also proves
+the persistence split: reload keeps the POV, drops the flip.
 
 ### Arrows are coloured per move, and duplicates fan apart
 

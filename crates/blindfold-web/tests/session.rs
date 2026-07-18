@@ -225,6 +225,29 @@ fn an_unfinished_promotion_is_not_scored_and_does_not_latch() {
     );
 }
 
+/// The board flip is a per-puzzle view toggle: it flips and flips back, works even
+/// after the board is revealed (unlike the drawing edits, which lock on a solve),
+/// and resets to the POV preference when the next puzzle loads.
+#[test]
+fn flipping_toggles_is_unlocked_and_resets_with_the_puzzle() {
+    let mut a = session::Attempt::new();
+    assert!(!a.flipped(), "a fresh attempt opens at the POV preference");
+    a.flip();
+    assert!(a.flipped());
+    a.flip();
+    assert!(!a.flipped(), "flipping again flips back");
+
+    // Flip is not locked by a solve — reading the revealed mate from the other side
+    // is a legitimate thing to do, where drawing is not.
+    a.submit(session::Solve::Solved(solved_steps()));
+    assert!(a.is_solved());
+    a.flip();
+    assert!(a.flipped(), "flip still works once solved");
+
+    a.reset();
+    assert!(!a.flipped(), "a new puzzle opens unflipped");
+}
+
 fn solved_steps() -> Vec<mate::Step> {
     let p = puzzle_of_depth(3);
     match session::solve(&p, &p.solution) {

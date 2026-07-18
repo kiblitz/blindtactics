@@ -13,7 +13,7 @@ but the same class of bug lives in the step wiring, which is what this spec driv
 
 ## What it checks
 
-`reveal.spec.js` holds three tests (the **Solve, step, and rate** one runs on two
+`reveal.spec.js` holds four tests (the **Solve, step, and rate** one runs on two
 pinned puzzles):
 
 - **Blind board.** Loads the app and confirms the board is a void with real piece
@@ -43,6 +43,11 @@ pinned puzzles):
   the arrow lands, Submit is enabled (nothing is left unresolved behind a picker), and
   the move's promotion control sits at its "no promotion" default — the ~14% of puzzles
   whose key is a non-pawn move to the last rank depend on this staying enterable.
+- **POV setting and flip.** Drives the real settings menu and flip button and reads the
+  board's own top-left `data-square` to confirm the re-render happened: POV=White puts a8
+  in the corner, POV=Black mirrors to h1, and flip inverts the current view. White/Black
+  are puzzle-independent, so nothing is pinned. A reload then proves the design's split —
+  the POV persisted to `localStorage`, the transient flip did not.
 
 The solutions come from all four committed `database/mate_in_*.jsonl` files, read
 off disk, so the test cannot drift from what the app was built with.

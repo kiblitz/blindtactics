@@ -259,6 +259,12 @@ pub struct Attempt {
     /// definitive submission and not cleared until [`reset`](Attempt::reset) starts
     /// a new puzzle, so retrying a missed puzzle cannot farm or bleed rating.
     scored: bool,
+    /// Whether the board is flipped from the point-of-view preference for *this*
+    /// puzzle. A transient view toggle, so it lives here (reset per puzzle by
+    /// [`reset`](Attempt::reset)) rather than in the persisted [`crate::settings`],
+    /// and is deliberately not locked once solved: flipping to view the mate from
+    /// the other side is useful precisely after the reveal.
+    flipped: bool,
 }
 
 impl Attempt {
@@ -276,6 +282,19 @@ impl Attempt {
 
     pub fn ply(&self) -> usize {
         self.ply
+    }
+
+    /// Whether the board is flipped from the point-of-view preference for this
+    /// puzzle.
+    pub fn flipped(&self) -> bool {
+        self.flipped
+    }
+
+    /// Flip the board for this puzzle, or flip it back. Unlike the drawing edits
+    /// this is *not* locked once solved — flipping to read the revealed mate from
+    /// the other side is a legitimate thing to do after the board appears.
+    pub fn flip(&mut self) {
+        self.flipped = !self.flipped;
     }
 
     /// The line has been solved: the board is revealed and drawing is locked.
@@ -363,13 +382,15 @@ impl Attempt {
     }
 
     /// Clear the line and the verdict and start a fresh attempt at a new puzzle.
-    /// Resets the reveal cursor and the scored flag, so the next puzzle rates on
-    /// its own first submission.
+    /// Resets the reveal cursor, the scored flag, and the board flip — so the next
+    /// puzzle rates on its own first submission and opens at the POV preference, the
+    /// flip being a per-puzzle view choice.
     pub fn reset(&mut self) {
         self.arrows.clear();
         self.solve = None;
         self.ply = 0;
         self.scored = false;
+        self.flipped = false;
     }
 
     /// Step the reveal one ply toward the start. Saturates at `0` (the position the

@@ -16,8 +16,10 @@ use crate::constants;
 /// Which side of the board the user is sitting on.
 ///
 /// Explicit rather than a `flipped: bool`, so call sites read as the chess fact
-/// they encode rather than as a rendering detail. The solver's back rank is
-/// always at the bottom, as in every board the user has ever played on.
+/// they encode rather than as a rendering detail. The wrapped colour is whichever
+/// side is drawn along the bottom edge — the solver's by default, but the
+/// point-of-view setting and the per-puzzle flip can seat either side there (see
+/// [`crate::settings::facing`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Orientation(pub shakmaty::Color);
 
