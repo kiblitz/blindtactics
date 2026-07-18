@@ -14,15 +14,10 @@ use leptos::prelude::*;
 #[component]
 pub fn App() -> impl IntoView {
     let session = RwSignal::new(session::Session::new(database::load()));
-    let arrows: RwSignal<Vec<arrow::Arrow>> = RwSignal::new(Vec::new());
-    let solve: RwSignal<Option<session::Solve>> = RwSignal::new(None);
-    // How many plies of a solved line have been played out. Only meaningful while
-    // `solve` is `Solved`; reset with it.
-    let ply = RwSignal::new(0usize);
-    // Bumped whenever the attempt changes identity, so a timer can tell whether
-    // it still belongs to the reveal that armed it. A counter rather than the
-    // puzzle's id because "same puzzle, resubmitted" is also a different attempt.
-    let epoch = RwSignal::new(0u64);
+    // The whole attempt in one signal, so its reset invariant lives in one place a
+    // native test can reach rather than in a hand-rolled closure here — see
+    // `session::Attempt`.
+    let attempt = RwSignal::new(session::Attempt::new());
 
     let puzzle = Signal::derive(move || session.get().current().clone());
     let position = Signal::derive(move || {
@@ -32,43 +27,52 @@ pub fn App() -> impl IntoView {
         puzzle.with(|p| p.solver().expect("the embedded database is verified"))
     });
 
-    // Everything about the attempt, cleared together. Separate `set` calls in
-    // three handlers is how a board ends up revealed on a fresh puzzle.
-    let reset = move || {
-        arrows.set(Vec::new());
-        solve.set(None);
-        ply.set(0);
-        epoch.update(|e| *e += 1);
-    };
+    // The attempt projected for the view. `Memo`, not a plain derive, so a ply tick
+    // — which changes `attempt` but not the drawn line or the verdict — does not
+    // re-render the line panel or, worse, re-announce the verdict under its
+    // `aria-live`. The reveal signals below are memos for the same reason: the
+    // pieces layer redraws only when the position it shows actually changes.
+    let drawn = Memo::new(move |_| attempt.with(|a| a.arrows().to_vec()));
+    let solve = Memo::new(move |_| attempt.with(|a| a.solve().cloned()));
+    let solved = Memo::new(move |_| attempt.with(session::Attempt::is_solved));
 
     let next = move |_| {
         session.update(session::Session::advance);
-        reset();
+        attempt.update(session::Attempt::reset);
     };
 
     let submit = move |_| {
-        let verdict = puzzle.with(|p| session::solve(p, &arrows.get_untracked()));
-        ply.set(0);
-        epoch.update(|e| *e += 1);
-        solve.set(Some(verdict));
+        let line = attempt.with_untracked(|a| a.arrows().to_vec());
+        let verdict = puzzle.with_untracked(|p| session::solve(p, &line));
+        attempt.update(|a| a.submit(verdict));
     };
 
-    // The reveal. Watches `solve` and walks the replay forward, one timer per ply.
+    let draw = move |arrow: arrow::Arrow| attempt.update(|a| a.draw(arrow));
+    let undo = move |()| attempt.update(session::Attempt::undo);
+    let clear = move |()| attempt.update(session::Attempt::clear);
+    let promote = move |(index, role): (usize, shakmaty::Role)| {
+        attempt.update(|a| a.toggle_promotion(index, role))
+    };
+
+    // The reveal. Watches the attempt and walks the replay forward, one timer per
+    // ply.
     //
-    // `ply.get()` is deliberately **tracked**: advancing it re-runs this effect,
-    // which arms the next ply's timer. That self-retriggering is the whole clock —
-    // read it untracked and the effect fires once, the board takes a single step
-    // and freezes there, still captioned "mate". Which is exactly what it did.
+    // Reading `a.ply()` through `attempt.with` is deliberately **tracked**:
+    // advancing it re-runs this effect, which arms the next ply's timer. That
+    // self-retriggering is the whole clock — read untracked, the effect fires once,
+    // the board takes a single step and freezes there, still captioned "mate".
+    // Which is exactly what it did.
     //
     // The first ply waits longer than the rest: the board has just gone from void
     // to pieces, and moving something immediately steps on the moment the user
-    // solved the puzzle for.
+    // solved the puzzle for. The two-guard check (identity + idempotence) lives in
+    // `Attempt::tick`, where a native test can reach it.
     Effect::new(move |_| {
-        let Some(session::Solve::Solved(steps)) = solve.get() else {
+        let armed = attempt.with(|a| a.steps().map(|steps| (steps.len(), a.ply(), a.epoch())));
+        let Some((len, at, epoch)) = armed else {
             return;
         };
-        let at = ply.get();
-        if at >= steps.len() {
+        if at >= len {
             return;
         }
         let delay = if at == 0 {
@@ -76,37 +80,25 @@ pub fn App() -> impl IntoView {
         } else {
             constants::PLAYBACK_MS
         };
-        let mine = epoch.get_untracked();
         set_timeout(
             move || {
-                // Two different guards, and both are load-bearing.
-                //
-                // `epoch` is identity: a timer outlives the attempt that armed
-                // it, so one still in flight when the user hits "Next" must not
-                // step the next reveal forward. An earlier version compared plies
-                // for this and its comment claimed it was checking ownership — it
-                // was not, and a timer armed at ply 0 sailed through the check
-                // because `reset` puts ply back to 0 too.
-                //
-                // `ply` is idempotence: the effect can re-run for a ply it has
-                // already armed a timer for, and two timers each incrementing
-                // would skip a move of the replay.
-                if epoch.get_untracked() == mine && ply.get_untracked() == at {
-                    ply.update(|n| *n += 1);
-                }
+                attempt.update(|a| {
+                    a.tick(at, epoch);
+                });
             },
             std::time::Duration::from_millis(delay),
         );
     });
 
-    // The position the board draws: `None` while the user is still blind, then
-    // the start position, then each ply of the replay.
-    let revealed = Signal::derive(move || match solve.get() {
-        Some(session::Solve::Solved(steps)) => Some(
-            session::step_at(&steps, ply.get())
-                .map_or_else(|| position.get(), |step| step.after.clone()),
-        ),
-        _ => None,
+    // The position the board draws: `None` while the user is still blind, then the
+    // start position, then each ply of the replay.
+    let revealed = Memo::new(move |_| {
+        attempt.with(|a| {
+            a.steps().map(|steps| {
+                session::step_at(steps, a.ply())
+                    .map_or_else(|| position.get(), |step| step.after.clone())
+            })
+        })
     });
 
     // The square the move just landed on.
@@ -121,14 +113,16 @@ pub fn App() -> impl IntoView {
     // to be regenerated larger, the roster carries castling rights *because they
     // decide mates*, and this would come back as a wrong square with nothing
     // failing.
-    let highlight = Signal::derive(move || match solve.get() {
-        Some(session::Solve::Solved(steps)) => session::step_at(&steps, ply.get())
-            .and_then(|step| arrow::Arrow::of_move(&step.played))
-            .map(|drag| drag.to),
-        _ => None,
+    let highlight = Memo::new(move |_| {
+        attempt.with(|a| {
+            a.steps()
+                .and_then(|steps| session::step_at(steps, a.ply()))
+                .and_then(|step| arrow::Arrow::of_move(&step.played))
+                .map(|drag| drag.to)
+        })
     });
 
-    let locked = Signal::derive(move || matches!(solve.get(), Some(session::Solve::Solved(_))));
+    let locked = solved;
 
     view! {
         <main class="app">
@@ -141,7 +135,10 @@ pub fn App() -> impl IntoView {
                 </p>
             </header>
 
-            <Tiers session=session reset=Callback::new(move |_| reset()) />
+            <Tiers
+                session=session
+                reset=Callback::new(move |()| attempt.update(session::Attempt::reset))
+            />
 
             <div class="layout">
                 <div class="layout__board">
@@ -153,7 +150,8 @@ pub fn App() -> impl IntoView {
                         view! {
                             <board::Board
                                 orientation=orientation
-                                arrows=arrows
+                                drawn=drawn
+                                on_draw=Callback::new(draw)
                                 revealed=revealed
                                 highlight=highlight
                                 locked=locked
@@ -171,10 +169,13 @@ pub fn App() -> impl IntoView {
                         view! {
                             <panel::Roster roster=r depth=p.depth />
                             <line::Line
-                                arrows=arrows
+                                drawn=drawn
                                 solver=solver.get()
                                 depth=p.depth
                                 solve=solve
+                                on_undo=Callback::new(undo)
+                                on_clear=Callback::new(clear)
+                                on_promote=Callback::new(promote)
                                 on_submit=Callback::new(submit)
                                 on_next=Callback::new(next)
                             />
@@ -193,7 +194,7 @@ pub fn App() -> impl IntoView {
                 <p>
                     "Puzzles from the "
                     <a href="https://database.lichess.org/#puzzles">"Lichess puzzle database"</a>
-                    " (CC0). Pieces by Colin M.L. Burnett (GPL). "
+                    " (CC0). Pieces by Colin M.L. Burnett, via Lichess (GPLv2-or-later). This app is "
                     <a href="https://www.gnu.org/licenses/gpl-3.0.html">"GPL-3.0-or-later"</a> "."
                 </p>
             </footer>

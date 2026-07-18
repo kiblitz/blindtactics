@@ -16,6 +16,15 @@
 # Review-agent scratch worktrees.
 /target-review/
 
+# Node / Playwright, for the browser test in `crates/blindfold-web`. The built
+# bundle and the browser downloads are regenerated; only the spec is tracked.
+node_modules/
+dist/
+/crates/blindfold-web/test-results/
+/crates/blindfold-web/playwright-report/
+/crates/blindfold-web/blob-report/
+/crates/blindfold-web/.playwright/
+
 # Editors / OS / tooling.
 .vs/
 .idea/

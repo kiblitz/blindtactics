@@ -69,7 +69,14 @@ fn square_of(
 #[component]
 pub fn Board(
     orientation: square::Orientation,
-    arrows: RwSignal<Vec<arrow::Arrow>>,
+    /// The committed arrows to draw. Read-only: the board reports a new one
+    /// through `on_draw` rather than pushing to a shared vector, so all attempt
+    /// state lives behind [`crate::session::Attempt`].
+    #[prop(into)]
+    drawn: Signal<Vec<arrow::Arrow>>,
+    /// Called with each arrow the user completes by dragging.
+    #[prop(into)]
+    on_draw: Callback<arrow::Arrow>,
     #[prop(into)] revealed: Signal<Option<shakmaty::Chess>>,
     /// The square a move just landed on, lit so the eye can follow the replay.
     #[prop(into)]
@@ -120,7 +127,7 @@ pub fn Board(
         if from == to || locked.get_untracked() {
             return;
         }
-        arrows.update(|line| line.push(arrow::Arrow::new(from, to)));
+        on_draw.run(arrow::Arrow::new(from, to));
     };
 
     let squares = square::in_layout_order(orientation);
@@ -163,7 +170,7 @@ pub fn Board(
                     .collect_view()}
             </div>
 
-            <Arrows arrows=arrows dragging=dragging hovering=hovering orientation=orientation />
+            <Arrows drawn=drawn dragging=dragging hovering=hovering orientation=orientation />
 
             <div class="board__pieces">
                 {move || {
@@ -219,7 +226,7 @@ fn Coordinates(square: shakmaty::Square, orientation: square::Orientation) -> im
 /// The numbered arrows, plus the one being dragged right now.
 #[component]
 fn Arrows(
-    arrows: RwSignal<Vec<arrow::Arrow>>,
+    #[prop(into)] drawn: Signal<Vec<arrow::Arrow>>,
     dragging: Dragging,
     hovering: RwSignal<Option<shakmaty::Square>>,
     orientation: square::Orientation,
@@ -258,7 +265,7 @@ fn Arrows(
             </defs>
 
             {move || {
-                arrows
+                drawn
                     .get()
                     .into_iter()
                     .enumerate()

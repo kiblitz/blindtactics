@@ -1,0 +1,13 @@
+{
+  "name": "blindfold-web-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Browser tests for blindfold-web. Not published; exists only to run Playwright.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  }
+}

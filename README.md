@@ -58,6 +58,20 @@ cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```
 
+To run the web app: `trunk serve` in `crates/blindfold-web` (`trunk build --release` for
+`dist/`).
+
+There is also one browser test — `crates/blindfold-web/e2e/reveal.spec.js` — for the class
+of bug native tests cannot see (reactive wiring; it caught a replay that froze after one
+ply). From `crates/blindfold-web`: `npm install`, `npx playwright install chromium`, then
+`npm test`.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request: one job for `fmt --check`,
+clippy (native and wasm, warnings denied), and `cargo test --workspace`; a second that
+builds the release bundle and runs the browser test against real chromium.
+
 ## Licensing
 
 **This project is GPL-3.0-or-later.** Not by preference — it depends on

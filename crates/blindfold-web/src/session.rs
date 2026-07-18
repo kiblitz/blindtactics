@@ -4,16 +4,14 @@
 //! puzzle comes next and what a replay shows are testable under native
 //! `cargo test`. The components in [`crate::app`] hold them in signals.
 //!
-//! **The attempt itself — the drawn line, the verdict, the replay cursor, and the
-//! timer epoch that guards it — is *not* here.** It lives as four signals
-//! (`arrows`, `solve`, `ply`, `epoch`) in [`crate::app`], written by three
-//! different components, which is the granularity Leptos wants. That is a real gap
-//! and worth naming: `Session` guards its own cursor invariant ("always admitted
-//! by `filter`") in one place, while the attempt's equivalent is a hand-rolled
-//! `reset` closure whose own comment admits the risk. Folding them into an
-//! `Attempt` value with `reset`/`draw`/`undo` would be the consistent thing, and
-//! would make the reveal's clock natively testable. Deferred, not rejected — see
-//! CLAUDE.md.
+//! The attempt itself — the drawn line, the verdict, the replay cursor, and the
+//! timer epoch that guards it — is [`Attempt`], a plain value here rather than four
+//! loose signals in [`crate::app`]. `app` holds exactly one `RwSignal<Attempt>` and
+//! mutates it through the methods below; the reset invariant ("these move together,
+//! or the board ends up revealed on a fresh puzzle") lives in `Attempt::reset`
+//! where a native test can reach it, not in a hand-rolled closure it cannot. Both
+//! of the reveal's historic bugs lived in this cursor, so its transitions are
+//! pinned here.
 //!
 //! It deliberately does **not** wrap [`blindfold_core::mate::judge`]. Validating
 //! a submission is exactly that call — the same one the curation tool makes — and
@@ -143,7 +141,12 @@ impl Session {
 /// `Verdict` being rendered directly: [`Solve::Solved`] carries the replay, which
 /// costs a search to produce, and recomputing it on every re-render of an
 /// animating board would be absurd.
-#[derive(Clone, Debug)]
+///
+/// `PartialEq` is what lets a [`leptos::prelude::Memo`] deduplicate it: the reveal
+/// advances `ply` many times while `solve` stays the same `Solved(steps)`, and
+/// without dedup the verdict would re-render — and re-announce, under `aria-live`
+/// — on every tick.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Solve {
     /// The line mates against every defense. Carries the reveal.
     Solved(Vec<mate::Step>),
@@ -222,5 +225,153 @@ pub fn explain(reason: &mate::Reason, depth: usize, solver: shakmaty::Color) -> 
         // mate-solver bug, and a user told "no mate" after stalemating would go
         // looking for the wrong mistake.
         mate::Reason::Stalemate => "Some defense is stalemated — a draw, not a mate.".to_string(),
+    }
+}
+
+/// The user's attempt at the current puzzle: the line drawn, the verdict once
+/// submitted, and the reveal's cursor.
+///
+/// One value, not four loose signals. The reason is testability: both reactive
+/// bugs this project has hit lived in the reveal's cursor — the replay froze after
+/// one ply, and a stale timer stepped the wrong attempt — and while these lived as
+/// separate signals in `app`, kept in step by a hand-rolled `reset` closure, no
+/// native test could reach them. Here the transitions are plain methods on a plain
+/// value, and [`crate::session`]'s tests drive them directly. `app` holds exactly
+/// one `RwSignal<Attempt>` and drives its reveal with [`Attempt::tick`]; the
+/// browser test covers the Leptos wiring that a native test still cannot.
+///
+/// Fields are private because the invariant — `ply`, `solve` and `epoch` move
+/// together — is the whole point, and a caller reaching past the methods could
+/// break it exactly the way the four loose signals could.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Attempt {
+    arrows: Vec<arrow::Arrow>,
+    solve: Option<Solve>,
+    /// How many plies of a solved line have been played out. Meaningful only while
+    /// `solve` is `Solved`.
+    ply: usize,
+    /// Identity of the current attempt. A reveal timer captures the epoch it was
+    /// armed under and refuses to step an attempt it no longer belongs to — a
+    /// counter rather than the puzzle's id, because "same puzzle, resubmitted" is a
+    /// new attempt too.
+    epoch: u64,
+}
+
+impl Attempt {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn arrows(&self) -> &[arrow::Arrow] {
+        &self.arrows
+    }
+
+    pub fn solve(&self) -> Option<&Solve> {
+        self.solve.as_ref()
+    }
+
+    pub fn ply(&self) -> usize {
+        self.ply
+    }
+
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// The line has been solved: the board is revealed and drawing is locked.
+    pub fn is_solved(&self) -> bool {
+        matches!(self.solve, Some(Solve::Solved(_)))
+    }
+
+    /// The replay's plies, or `None` when the attempt is not a solve.
+    pub fn steps(&self) -> Option<&[mate::Step]> {
+        match &self.solve {
+            Some(Solve::Solved(steps)) => Some(steps),
+            _ => None,
+        }
+    }
+
+    /// Append one arrow to the line. Ignored once solved: the board is locked, and
+    /// a stray draw must not extend a line that has already been judged.
+    pub fn draw(&mut self, arrow: arrow::Arrow) {
+        if self.is_solved() {
+            return;
+        }
+        self.arrows.push(arrow);
+    }
+
+    /// Drop the last arrow. Ignored once solved, for the same reason as [`draw`].
+    pub fn undo(&mut self) {
+        if self.is_solved() {
+            return;
+        }
+        self.arrows.pop();
+    }
+
+    /// Drop every arrow. Ignored once solved.
+    pub fn clear(&mut self) {
+        if self.is_solved() {
+            return;
+        }
+        self.arrows.clear();
+    }
+
+    /// Toggle the promotion piece on the arrow at `index`. Tapping the chosen role
+    /// again clears it, so a misread of the roster is one tap to undo rather than a
+    /// cleared line. A no-op if `index` is out of range or the line is locked.
+    pub fn toggle_promotion(&mut self, index: usize, role: shakmaty::Role) {
+        if self.is_solved() {
+            return;
+        }
+        if let Some(a) = self.arrows.get_mut(index) {
+            a.promotion = (a.promotion != Some(role)).then_some(role);
+        }
+    }
+
+    /// Record a verdict and start its reveal at ply 0. Bumps the epoch, so a timer
+    /// from a previous submission of the same puzzle cannot step this one.
+    pub fn submit(&mut self, verdict: Solve) {
+        self.solve = Some(verdict);
+        self.ply = 0;
+        self.epoch += 1;
+    }
+
+    /// Clear the line and the verdict and start a fresh attempt. Bumps the epoch so
+    /// a reveal timer still in flight cannot step the new attempt forward — the
+    /// guard the old hand-rolled `reset` closure needed and, in an earlier version,
+    /// got wrong.
+    pub fn reset(&mut self) {
+        self.arrows.clear();
+        self.solve = None;
+        self.ply = 0;
+        self.epoch += 1;
+    }
+
+    /// Advance the reveal by one ply, but only if this call still belongs to the
+    /// current attempt (`epoch`), has not already been applied (`ply`), and there is
+    /// a ply left to reveal. Returns whether it advanced.
+    ///
+    /// Three guards. `epoch` is identity: a timer outlives the attempt that armed
+    /// it, so one in flight when the user hits "Next" must not step the next reveal.
+    /// `ply` is idempotence: the reveal effect can arm a second timer for a ply it
+    /// already armed, and two unguarded increments would skip a move. The first
+    /// version had only the ply check and a comment claiming it was the ownership
+    /// check; it was not, and a timer armed at ply 0 sailed through it because
+    /// `reset` puts ply back to 0 too.
+    ///
+    /// The bound (`at < steps`) lives here, not only in `app`'s reveal effect that
+    /// drives it: `app` already declines to arm a timer past the last step, but a
+    /// value that stays correct without trusting its one caller is the whole reason
+    /// the cursor was extracted. Without it, one tick past the end pushes `ply`
+    /// beyond the steps and [`step_at`] falls back to the *start* position, flashing
+    /// the board back mid-reveal.
+    pub fn tick(&mut self, at: usize, epoch: u64) -> bool {
+        let remaining = self.steps().is_some_and(|steps| at < steps.len());
+        if self.epoch == epoch && self.ply == at && remaining {
+            self.ply += 1;
+            true
+        } else {
+            false
+        }
     }
 }

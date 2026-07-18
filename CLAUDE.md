@@ -141,7 +141,7 @@ blindfold-chess-trainer/
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 34 tests, clippy clean. Blank board, drag-drawn numbered
+- `blindfold-web` — built, 44 tests, clippy clean. Blank board, drag-drawn numbered
   arrows, roster panel with real piece artwork, submit, animated reveal. Builds to a
   ~680 KiB wasm bundle with `trunk build --release` (the database is ~46 KiB of that).
   **KiB, and stated as such deliberately**: an earlier draft said "687 KB" from a
@@ -166,8 +166,10 @@ re-measure, do not quote it.
 - `database/` — **400 puzzles, 100 per depth**, curated from the 2026-07-05 dump and
   committed. Rosters run 4-10 squares, median 9. Every one is re-proved by
   `crates/blindfold-curate/tests/database.rs`.
-- CI — **does not exist.** There is no `.github/`. Wherever this file says a check
-  "runs in CI", read it as "is intended to, once CI exists".
+- CI — `.github/workflows/ci.yml`, on every push and PR. A `check` job runs
+  `fmt --check`, clippy (native and wasm, `-D warnings`), and `cargo test --workspace`;
+  an `e2e` job installs trunk and Playwright's chromium, builds the release bundle, and
+  runs the browser reveal test. Both must be green.
 
 **`blindfold-curate` has both a lib and a bin target.** The lib is not there for
 reuse — nothing else links it — it exists so `tests/` can reach `constants`, `select`,
@@ -195,7 +197,7 @@ a thread pool, and a file writer, and nothing worth a test.
 no toolchain. Anything that can live in core, must.
 
 The web crate should contain almost no logic worth testing *in its components*. That it has
-28 tests anyway is not a contradiction: they cover `square`, `session` and `database`, the
+44 tests anyway is not a contradiction: they cover `square`, `session` and `database`, the
 crate's Leptos-free parts, which is exactly where its logic was pushed so a native test
 could reach it. The rule bites on `board`/`panel`/`line`/`app` — if a test wants to reach
 into one of those, the thing it wants is in the wrong module.
@@ -240,7 +242,9 @@ its only consumer. That is the line; it is not "no strings in core".
   is on screen. **No Leptos in it**, so it is tested natively. Read its doc before
   touching orientation.
 - `session` — which puzzle, what was drawn, `solve` (one `judge` call), `step_at` (the
-  replay's off-by-one), and `explain` (a refutation as a sentence). Also no Leptos, also
+  replay's off-by-one), `explain` (a refutation as a sentence), and `Attempt` (the reveal
+  state machine — draw/undo/clear/toggle_promotion/submit/reset/tick — folded out of `app`'s
+  loose signals so a native test can drive every transition). Also no Leptos, also
   natively tested — `explain` and `step_at` live here rather than in `line`/`app` precisely
   so a native test can reach them.
 - `database` — the committed JSONL, `include_str!`d.
@@ -266,11 +270,14 @@ version read `ply` with `get_untracked`, so the effect never re-ran: the board t
 `judge` was right, `playback` was right, the pure geometry was right. The bug was in the
 wiring, and only a browser could see it.
 
-So `tests/database.rs::the_replay_ends_in_checkmate` now pins the *data* half (a mate in
-N replays `2N-1` plies and ends in checkmate), and the reactive half is checked by
-driving Chrome with Playwright. That driver is **not checked in yet** — it lives in the
-scratchpad. It should be; note it as owed work rather than pretending native tests cover
-this.
+So `tests/database.rs::the_replay_ends_in_checkmate` pins the *data* half (a mate in
+N replays `2N-1` plies and ends in checkmate), the reveal cursor's transitions are pinned
+natively as a pure state machine (`session::Attempt`'s tests — `tick`, the epoch/ply
+guards, the stale-timer case), and the reactive half is checked by driving chromium with
+Playwright. That driver is now **checked in**: `crates/blindfold-web/e2e/reveal.spec.js`,
+run by CI. It draws a real solution and asserts the replay lights **more than one** square
+over its animation — a frozen replay lit exactly one. The teeth are verified: simulate the
+freeze (make `Attempt::tick` advance only from ply 0) and that assertion fails.
 
 The corollary, stated because it cost a cycle: **`get_untracked` in an `Effect` is how
 you turn a loop into a single shot.** Reach for it only to break a cycle you have
@@ -501,20 +508,6 @@ Prunings deliberately NOT added, with reasons:
   today that is held by `search_and_judge_agree` sampling rather than by construction. The
   suggested fix is to extract the advance generic over a `Trail` trait (`()` for search,
   `Vec<Arrow>` for judge, monomorphized away). Deferred, not rejected.
-- **Fold the attempt into a value.** `session::Session` guards its own cursor invariant
-  in one place; the *attempt* — the drawn line, the verdict, the replay cursor, and the
-  timer epoch that guards it — is **four** loose signals (`arrows`, `solve`, `ply`, `epoch`)
-  in `app.rs` kept in step by a hand-rolled `reset` closure, in the one module no native
-  test can reach. That is backwards: `lib.rs` says the split must follow the risk, and the
-  risk is in the attempt (both reactive bugs so far lived there). An
-  `Attempt { arrows, solve, ply, epoch }` in `session`, with `reset`/`draw`/`undo`, would
-  be natively testable. Flagged at 60 in review; deferred because the components write to
-  those signals directly and the refactor touches all four.
-- **Check in the browser driver.** The Playwright script that drives the real app —
-  reads the roster, drags the arrows, submits, asserts the reveal — lives in the
-  scratchpad and is the only thing that catches reactive-wiring bugs. It found the
-  frozen-replay bug. Until it is checked in and wired to CI, that class of bug is
-  unguarded.
 - **Sample candidates from the whole dump, not the front of it.** `gather` takes the first
   `CANDIDATES_PER_DEPTH` matching rows in scan order. Lichess IDs are effectively random
   w.r.t. rating, so this is a legitimate sample rather than a bias — but it is *assumed*

@@ -293,6 +293,154 @@ fn explain_does_not_cry_promotion_for_an_ordinary_illegal_move() {
     assert!(message.to_lowercase().contains("not legal"));
 }
 
+// --- Attempt: the state machine the reveal's clock runs on --------------------
+//
+// Folding the attempt out of `app`'s loose signals is what lets these run
+// natively; the reveal's two historic bugs both lived in this cursor, and the
+// browser test now covers only the Leptos wiring around it.
+
+#[test]
+fn a_fresh_attempt_is_empty_and_blind() {
+    let a = session::Attempt::new();
+    assert!(a.arrows().is_empty());
+    assert!(a.solve().is_none());
+    assert_eq!(a.ply(), 0);
+    assert!(!a.is_solved());
+    assert!(a.steps().is_none());
+}
+
+#[test]
+fn drawing_undoing_and_clearing_edit_the_line() {
+    let mut a = session::Attempt::new();
+    a.draw(arrow(shakmaty::Square::E2, shakmaty::Square::E4));
+    a.draw(arrow(shakmaty::Square::D2, shakmaty::Square::D4));
+    assert_eq!(a.arrows().len(), 2);
+    a.undo();
+    assert_eq!(
+        a.arrows(),
+        [arrow(shakmaty::Square::E2, shakmaty::Square::E4)]
+    );
+    a.clear();
+    assert!(a.arrows().is_empty());
+}
+
+/// Once solved the board is locked; a stray draw/undo/clear must not touch a line
+/// that has already been judged.
+#[test]
+fn a_solved_line_is_locked_against_edits() {
+    let mut a = session::Attempt::new();
+    a.draw(arrow(shakmaty::Square::E2, shakmaty::Square::E4));
+    a.submit(session::Solve::Solved(solved_steps()));
+    assert!(a.is_solved());
+    a.draw(arrow(shakmaty::Square::D2, shakmaty::Square::D4));
+    a.undo();
+    a.clear();
+    assert_eq!(a.arrows().len(), 1, "edits are ignored once solved");
+}
+
+#[test]
+fn toggle_promotion_sets_replaces_and_clears() {
+    let mut a = session::Attempt::new();
+    a.draw(arrow(shakmaty::Square::G7, shakmaty::Square::G8));
+    a.toggle_promotion(0, shakmaty::Role::Queen);
+    assert_eq!(a.arrows()[0].promotion, Some(shakmaty::Role::Queen));
+    a.toggle_promotion(0, shakmaty::Role::Rook);
+    assert_eq!(
+        a.arrows()[0].promotion,
+        Some(shakmaty::Role::Rook),
+        "a different role replaces the choice"
+    );
+    a.toggle_promotion(0, shakmaty::Role::Rook);
+    assert_eq!(a.arrows()[0].promotion, None, "the same role clears it");
+    a.toggle_promotion(5, shakmaty::Role::Queen); // out of range: must not panic
+}
+
+#[test]
+fn submit_starts_the_reveal_and_bumps_the_epoch() {
+    let mut a = session::Attempt::new();
+    let before = a.epoch();
+    a.submit(session::Solve::Solved(solved_steps()));
+    assert_eq!(a.ply(), 0);
+    assert!(a.epoch() > before, "a new attempt has a new epoch");
+    assert!(a.steps().is_some());
+}
+
+#[test]
+fn reset_clears_everything_and_bumps_the_epoch() {
+    let mut a = session::Attempt::new();
+    a.draw(arrow(shakmaty::Square::E2, shakmaty::Square::E4));
+    a.submit(session::Solve::Solved(solved_steps()));
+    let before = a.epoch();
+    a.reset();
+    assert!(a.arrows().is_empty());
+    assert!(a.solve().is_none());
+    assert_eq!(a.ply(), 0);
+    assert!(a.epoch() > before);
+}
+
+#[test]
+fn tick_advances_one_ply_for_the_attempt_that_armed_it() {
+    let mut a = session::Attempt::new();
+    a.submit(session::Solve::Solved(solved_steps()));
+    let e = a.epoch();
+    assert!(a.tick(0, e), "the armed ply advances");
+    assert_eq!(a.ply(), 1);
+    assert!(a.tick(1, e));
+    assert_eq!(a.ply(), 2);
+}
+
+/// Idempotence: a second timer armed for a ply already stepped must not step it
+/// again, or the replay skips a move.
+#[test]
+fn a_repeated_tick_for_the_same_ply_is_ignored() {
+    let mut a = session::Attempt::new();
+    a.submit(session::Solve::Solved(solved_steps()));
+    let e = a.epoch();
+    assert!(a.tick(0, e));
+    assert!(!a.tick(0, e), "the same ply must not advance twice");
+    assert_eq!(a.ply(), 1);
+}
+
+/// Identity: a timer armed under one attempt must not step the next. This is the
+/// exact bug the old ply-only guard let through — `reset` puts ply back to 0, so a
+/// stale timer armed at ply 0 sailed through a check that only compared plies.
+#[test]
+fn a_stale_tick_from_a_previous_attempt_is_rejected() {
+    let mut a = session::Attempt::new();
+    a.submit(session::Solve::Solved(solved_steps()));
+    let stale = a.epoch();
+    a.reset(); // as if the user hit "Next"
+    a.submit(session::Solve::Solved(solved_steps())); // a fresh attempt, back at ply 0
+    let fresh = a.epoch();
+    assert_ne!(stale, fresh);
+    assert!(
+        !a.tick(0, stale),
+        "a timer from the previous attempt must not step the new reveal"
+    );
+    assert_eq!(a.ply(), 0);
+    assert!(a.tick(0, fresh), "the current timer still advances it");
+    assert_eq!(a.ply(), 1);
+}
+
+/// Driving the clock to the end reproduces a full reveal: a mate in N replays
+/// `2N - 1` plies and then stops.
+#[test]
+fn ticking_through_the_reveal_walks_every_ply_once() {
+    let mut a = session::Attempt::new();
+    let steps = solved_steps();
+    let n = steps.len();
+    a.submit(session::Solve::Solved(steps));
+    let e = a.epoch();
+    for at in 0..n {
+        assert!(a.tick(at, e), "ply {at} must advance");
+    }
+    assert_eq!(a.ply(), n);
+    assert!(
+        !a.tick(n, e),
+        "there is nothing past the last ply to step to"
+    );
+}
+
 /// An empty set is a broken build, not a state to render. Pinned because the UI
 /// calls `current()` unconditionally, and that is only sound if this panics.
 #[test]

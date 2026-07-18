@@ -12,12 +12,19 @@ use blindfold_core::roster;
 use leptos::prelude::*;
 
 /// The drawn line, its promotion choices, and the submit controls.
+///
+/// Reads the line through `drawn` and reports edits through callbacks rather than
+/// mutating a shared vector, so the whole attempt lives behind one
+/// [`crate::session::Attempt`] value instead of a signal each component can poke.
 #[component]
 pub fn Line(
-    arrows: RwSignal<Vec<arrow::Arrow>>,
+    #[prop(into)] drawn: Signal<Vec<arrow::Arrow>>,
     solver: shakmaty::Color,
     depth: usize,
     #[prop(into)] solve: Signal<Option<session::Solve>>,
+    #[prop(into)] on_undo: Callback<()>,
+    #[prop(into)] on_clear: Callback<()>,
+    #[prop(into)] on_promote: Callback<(usize, shakmaty::Role)>,
     #[prop(into)] on_submit: Callback<()>,
     #[prop(into)] on_next: Callback<()>,
 ) -> impl IntoView {
@@ -29,19 +36,25 @@ pub fn Line(
 
             <ol class="line">
                 {move || {
-                    let drawn = arrows.get();
-                    if drawn.is_empty() {
+                    let line = drawn.get();
+                    if line.is_empty() {
                         return view! {
                             <li class="line__empty">"Drag from one square to another."</li>
                         }
                             .into_any();
                     }
-                    drawn
-                        .into_iter()
+                    line.into_iter()
                         .enumerate()
                         .map(|(i, a)| {
                             view! {
-                                <Step index=i entry=a arrows=arrows solver=solver locked=solved />
+                                <Step
+                                    index=i
+                                    entry=a
+                                    drawn=drawn
+                                    solver=solver
+                                    locked=solved
+                                    on_promote=on_promote
+                                />
                             }
                         })
                         .collect_view()
@@ -62,22 +75,22 @@ pub fn Line(
                         view! {
                             <button
                                 class="button button--primary"
-                                disabled=move || arrows.get().is_empty()
+                                disabled=move || drawn.get().is_empty()
                                 on:click=move |_| on_submit.run(())
                             >
                                 "Submit"
                             </button>
                             <button
                                 class="button"
-                                disabled=move || arrows.get().is_empty()
-                                on:click=move |_| arrows.update(|l| { l.pop(); })
+                                disabled=move || drawn.get().is_empty()
+                                on:click=move |_| on_undo.run(())
                             >
                                 "Undo"
                             </button>
                             <button
                                 class="button"
-                                disabled=move || arrows.get().is_empty()
-                                on:click=move |_| arrows.set(Vec::new())
+                                disabled=move || drawn.get().is_empty()
+                                on:click=move |_| on_clear.run(())
                             >
                                 "Clear"
                             </button>
@@ -107,9 +120,10 @@ pub fn Line(
 fn Step(
     index: usize,
     entry: arrow::Arrow,
-    arrows: RwSignal<Vec<arrow::Arrow>>,
+    #[prop(into)] drawn: Signal<Vec<arrow::Arrow>>,
     solver: shakmaty::Color,
     #[prop(into)] locked: Signal<bool>,
+    #[prop(into)] on_promote: Callback<(usize, shakmaty::Role)>,
 ) -> impl IntoView {
     let promotes = entry.could_be_promotion(solver);
 
@@ -130,7 +144,7 @@ fn Step(
                                         <button
                                             class="promotion__choice"
                                             class:promotion__choice--on=move || {
-                                                arrows
+                                                drawn
                                                     .get()
                                                     .get(index)
                                                     .and_then(|a| a.promotion)
@@ -139,18 +153,10 @@ fn Step(
                                             disabled=locked
                                             aria-label=roster::name(role, false)
                                             title=roster::name(role, false)
-                                            on:click=move |_| {
-                                                arrows
-                                                    .update(|line| {
-                                                        if let Some(a) = line.get_mut(index) {
-                                                            // Tapping the chosen role again clears it, so a
-                                                            // misread of the roster is one tap to undo rather
-                                                            // than a cleared line.
-                                                            a.promotion = (a.promotion != Some(role))
-                                                                .then_some(role);
-                                                        }
-                                                    })
-                                            }
+                                            // Tapping the chosen role again clears it (handled in
+                                            // `Attempt::toggle_promotion`), so a misread of the
+                                            // roster is one tap to undo rather than a cleared line.
+                                            on:click=move |_| on_promote.run((index, role))
                                         >
                                             <span inner_html=pieces::svg(solver, role) />
                                         </button>
