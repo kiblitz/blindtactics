@@ -85,6 +85,26 @@ pub const ARROW_HEAD_ANCHOR_Y: u32 = 5;
 /// the stroke.
 pub const ARROW_HEAD_SCALE: u32 = 4;
 
+/// Distinct colours for the numbered arrows, cycled by the move's position in the
+/// line so each arrow reads as its own colour rather than every one sharing the
+/// board's amber. Mid-saturation on purpose: the badge number is white with a dark
+/// outline (see `styles.css`), which stays legible on all of these on both themes.
+pub const ARROW_COLORS: [&str; 8] = [
+    "#d99a3f", "#4f8fd6", "#4bab5e", "#b45bd1", "#d95b6b", "#2fa7a0", "#b07a34", "#7b6cd6",
+];
+
+/// The colour of the in-flight ghost arrow — the board's base amber, distinct from
+/// the committed arrows' cycled [`ARROW_COLORS`]. Named so the one arrow whose
+/// colour is *not* drawn from the palette is still sourced from `constants` rather
+/// than inlined at the call site.
+pub const GHOST_ARROW_COLOR: &str = "var(--amber)";
+
+/// How far apart, in viewBox units, to fan two arrows that share the same from/to
+/// so a move drawn twice does not hide under its twin. Derived as a quarter of
+/// [`SQUARE_SIDE`] rather than hardcoded, so it stays a quarter-square if the
+/// viewBox is ever retuned.
+pub const ARROW_DUP_OFFSET: f64 = SQUARE_SIDE as f64 / 4.0;
+
 /// Font size of the number inside an arrow's badge, in viewBox units.
 ///
 /// Sized against [`ARROW_BADGE_RADIUS`]: it has to sit inside the disc.

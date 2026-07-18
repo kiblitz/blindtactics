@@ -6,16 +6,16 @@
 //! event plumbing.
 //!
 //! The board is layers in one `aspect-ratio: 1` box: the squares, an SVG overlay
-//! for the arrows, the pieces, and — while the user is choosing a promotion — a
-//! popup at the destination square. Only the squares (and the popup) take pointer
-//! events; the arrows and pieces are `pointer-events: none` so a drag that crosses
-//! an arrow it has already drawn does not get swallowed by it.
+//! for the arrows, and the pieces. Only the squares take pointer events; the arrows
+//! and pieces are `pointer-events: none` so a drag that crosses an arrow it has
+//! already drawn does not get swallowed by it. Promotion is chosen in the line
+//! panel, not here — a last-rank drag draws a plain move and the line offers a
+//! per-move piece control (see [`crate::line`]), so the board stays pure geometry.
 
 use crate::constants;
 use crate::pieces;
 use crate::square;
 use blindfold_core::arrow;
-use blindfold_core::roster;
 use leptos::prelude::*;
 use shakmaty::Position as _;
 
@@ -26,14 +26,6 @@ use shakmaty::Position as _;
 /// moving, and "no drag started here" and "a drag started on a1" are different
 /// states that must not be told apart by a coordinate.
 type Dragging = RwSignal<Option<shakmaty::Square>>;
-
-/// An open promotion popup: the square it sits on, and the index of the
-/// provisional arrow it is choosing a piece for.
-///
-/// Public so [`crate::app`], which owns the signal, constructs it through this
-/// alias rather than re-spelling the tuple — the shape and the meaning of its two
-/// fields live in one place.
-pub type Promoting = RwSignal<Option<(shakmaty::Square, usize)>>;
 
 /// The square under a pointer event, from the board element's own box.
 ///
@@ -84,23 +76,11 @@ pub fn Board(
     /// state lives behind [`crate::session::Attempt`].
     #[prop(into)]
     drawn: Signal<Vec<arrow::Arrow>>,
-    /// Called with each arrow the user completes by dragging.
+    /// Called with each arrow the user completes by dragging. A last-rank drag is
+    /// reported as a plain move like any other; whether it promotes is chosen later
+    /// in the line panel, so the board never has to guess.
     #[prop(into)]
     on_draw: Callback<arrow::Arrow>,
-    /// Called with `(arrow index, role)` when the user picks a promotion piece in
-    /// the board popup.
-    #[prop(into)]
-    on_promote: Callback<(usize, shakmaty::Role)>,
-    /// Called when the user dismisses the promotion popup by clicking away. The
-    /// provisional arrow is removed — a click outside the picker cancels the move,
-    /// the way it does in Lichess. Choosing "no promotion" *keeps* the plain move
-    /// instead; that is a separate exit (see the picker's own button).
-    #[prop(into)]
-    on_cancel: Callback<()>,
-    /// The open promotion popup, if any: the square it sits on and the index of the
-    /// provisional arrow it is choosing for. Owned by the app so it can disable
-    /// submission while a choice is pending — an unresolved move must not be judged.
-    promoting: Promoting,
     #[prop(into)] revealed: Signal<Option<shakmaty::Chess>>,
     /// The square a move just landed on, lit so the eye can follow the replay.
     #[prop(into)]
@@ -116,7 +96,7 @@ pub fn Board(
     let hovering: RwSignal<Option<shakmaty::Square>> = RwSignal::new(None);
 
     let on_down = move |ev: leptos::ev::PointerEvent| {
-        if locked.get_untracked() || promoting.get_untracked().is_some() {
+        if locked.get_untracked() {
             return;
         }
         // Capture, so a drag that leaves the board still delivers its `pointerup`
@@ -133,10 +113,7 @@ pub fn Board(
     };
 
     let on_move = move |ev: leptos::ev::PointerEvent| {
-        // Modal while a promotion is open, like `on_down`: the backdrop swallows
-        // `pointerdown` but not `pointermove`, so without this the hover highlight
-        // would still track the pointer under the covering backdrop.
-        if locked.get_untracked() || promoting.get_untracked().is_some() {
+        if locked.get_untracked() {
             return;
         }
         // Tracked whether or not a drag is in progress: mid-drag it aims the arrow,
@@ -162,20 +139,10 @@ pub fn Board(
         if from == to || locked.get_untracked() {
             return;
         }
-        let candidate = arrow::Arrow::new(from, to);
-        // Whether this drag could be a pawn promoting, read off the drag alone —
-        // see `arrow::Arrow::could_be_promotion`. Computed before `on_draw` moves
-        // the arrow away.
-        let promotes = candidate.could_be_promotion(orientation.0);
-        // `on_draw` is about to append this arrow, so it lands at the current
-        // length. The board is modal while a promotion is open (`on_down` bails and
-        // the backdrop swallows events), so nothing can slip in after it — the
-        // provisional arrow stays at this index until it is picked or cancelled.
-        let index = drawn.with_untracked(Vec::len);
-        on_draw.run(candidate);
-        if promotes {
-            promoting.set(Some((to, index)));
-        }
+        // A plain move, even onto the last rank. Whether it promotes is the line
+        // panel's question, not the board's — the board cannot know, since the same
+        // drag is a pawn's against one defense and a rook's against another.
+        on_draw.run(arrow::Arrow::new(from, to));
     };
 
     let squares = square::in_layout_order(orientation);
@@ -251,111 +218,6 @@ pub fn Board(
                         })
                 }}
             </div>
-
-            {move || {
-                promoting
-                    .get()
-                    .map(|(sq, index)| {
-                        view! {
-                            <Promotion
-                                square=sq
-                                index=index
-                                orientation=orientation
-                                on_promote=on_promote
-                                on_cancel=Callback::new(move |()| {
-                                    on_cancel.run(());
-                                    promoting.set(None);
-                                })
-                                on_pick=Callback::new(move |()| promoting.set(None))
-                            />
-                        }
-                    })
-            }}
-        </div>
-    }
-}
-
-/// The promotion popup: a column of piece choices at the destination square, over
-/// a full-board backdrop that cancels on any click outside it.
-///
-/// Three exits, because the picker opens on geometry alone and the move under it
-/// may not be a pawn's ([`arrow::Arrow::could_be_promotion`] is necessary, not
-/// sufficient): pick a piece to promote, choose **no promotion** to keep the plain
-/// move (a rook lift to the last rank is a real, legal move), or click away to take
-/// the whole move back. Without the middle exit the ~14% of puzzles whose key is a
-/// non-pawn move to the last rank could not be entered at all.
-#[component]
-fn Promotion(
-    square: shakmaty::Square,
-    index: usize,
-    orientation: square::Orientation,
-    #[prop(into)] on_promote: Callback<(usize, shakmaty::Role)>,
-    #[prop(into)] on_cancel: Callback<()>,
-    /// Called once the choice is resolved — a piece picked or "no promotion" — so
-    /// the board can close the popup. The plain arrow is already drawn, so closing
-    /// after "no promotion" simply leaves it in place.
-    #[prop(into)]
-    on_pick: Callback<()>,
-) -> impl IntoView {
-    // The promoting pawn is always the solver's, and the board is drawn from the
-    // solver's side, so the piece colour is exactly the orientation's.
-    let color = orientation.0;
-    let (col, row) = square::cell(square, orientation);
-    let per = constants::PERCENT_PER_SQUARE;
-
-    view! {
-        <div class="board__promotion">
-            // The backdrop swallows the pointer so the modal board draws no arrow
-            // behind it, and any press cancels the promotion.
-            <div
-                class="promotion-backdrop"
-                on:pointerdown=move |ev| {
-                    ev.stop_propagation();
-                    on_cancel.run(());
-                }
-            ></div>
-            <div
-                class="promotion-picker"
-                style:left=format!("{}%", f64::from(col) * per)
-                style:top=format!("{}%", f64::from(row) * per)
-                style:width=format!("{per}%")
-                // Keep the picker's own pointer events off the board's drag logic.
-                on:pointerdown=|ev| ev.stop_propagation()
-                on:pointerup=|ev| ev.stop_propagation()
-            >
-                {blindfold_core::constants::PROMOTABLE
-                    .into_iter()
-                    .map(|role| {
-                        view! {
-                            <button
-                                class="promotion-picker__choice"
-                                aria-label=roster::name(role, false)
-                                title=roster::name(role, false)
-                                on:click=move |ev| {
-                                    ev.stop_propagation();
-                                    on_promote.run((index, role));
-                                    on_pick.run(());
-                                }
-                            >
-                                <span inner_html=pieces::svg(color, role) />
-                            </button>
-                        }
-                    })
-                    .collect_view()}
-                // The escape hatch for a move that only *looked* like a promotion:
-                // keep the arrow as the plain move it already is.
-                <button
-                    class="promotion-picker__plain"
-                    aria-label="Move without promoting"
-                    title="Move without promoting"
-                    on:click=move |ev| {
-                        ev.stop_propagation();
-                        on_pick.run(());
-                    }
-                >
-                    "no promotion"
-                </button>
-            </div>
         </div>
     }
 }
@@ -415,40 +277,81 @@ fn Arrows(
                     markerHeight=constants::ARROW_HEAD_SCALE
                     orient="auto-start-reverse"
                 >
-                    <path d=head_path fill="currentColor" />
+                    // `context-stroke`, not a fixed fill, so the one shared marker
+                    // paints in whatever colour the arrow referencing it strokes with
+                    // — otherwise every head would take the amber inherited at the
+                    // `<defs>`, ignoring the per-arrow `style:color` below.
+                    <path d=head_path fill="context-stroke" />
                 </marker>
             </defs>
 
             {move || {
-                drawn
-                    .get()
-                    .into_iter()
+                let arrows = drawn.get();
+                arrows
+                    .iter()
                     .enumerate()
                     .map(|(i, a)| {
-                        view! { <Shaft from=a.from to=a.to orientation=orientation number=Some(i + 1) /> }
+                        // Each move its own colour, cycled by position; and a move
+                        // drawn more than once is fanned off its twins so both stay
+                        // visible instead of the later one hiding the earlier.
+                        let color = constants::ARROW_COLORS[i % constants::ARROW_COLORS.len()];
+                        let twins = arrows[..i]
+                            .iter()
+                            .filter(|b| b.from == a.from && b.to == a.to)
+                            .count();
+                        view! {
+                            <Shaft
+                                from=a.from
+                                to=a.to
+                                orientation=orientation
+                                number=Some(i + 1)
+                                color=color
+                                offset=twins as f64 * constants::ARROW_DUP_OFFSET
+                            />
+                        }
                     })
                     .collect_view()
             }}
 
             {move || {
                 let (from, to) = (dragging.get()?, hovering.get()?);
-                (from != to).then(|| view! { <Shaft from=from to=to orientation=orientation number=None /> })
+                (from != to)
+                    .then(|| {
+                        view! {
+                            <Shaft
+                                from=from
+                                to=to
+                                orientation=orientation
+                                number=None
+                                color=constants::GHOST_ARROW_COLOR
+                                offset=0.0
+                            />
+                        }
+                    })
             }}
         </svg>
     }
 }
 
 /// One arrow. `number` is its place in the line, or `None` while it is still
-/// being dragged and has no place yet.
+/// being dragged and has no place yet. `color` is its shaft/head/badge colour and
+/// `offset` fans it perpendicular off any twin sharing the same from/to.
 #[component]
 fn Shaft(
     from: shakmaty::Square,
     to: shakmaty::Square,
     orientation: square::Orientation,
     number: Option<usize>,
+    color: &'static str,
+    offset: f64,
 ) -> impl IntoView {
-    let (x1, y1) = square::centre(from, orientation);
-    let (x2, y2) = square::centre(to, orientation);
+    // Fan the whole shaft perpendicular to itself so a move drawn twice does not
+    // hide under its twin — the geometry lives in `square` where it is tested.
+    let ((x1, y1), (x2, y2)) = square::fan(
+        square::centre(from, orientation),
+        square::centre(to, orientation),
+        offset,
+    );
 
     // Stop short of the target's centre so the head points at the square rather
     // than covering it, and so two arrows converging on one square stay legible.
@@ -462,7 +365,7 @@ fn Shaft(
     let (hx, hy) = (x1 + dx * scale, y1 + dy * scale);
 
     view! {
-        <g class="arrow" class:arrow--ghost=number.is_none()>
+        <g class="arrow" class:arrow--ghost=number.is_none() style:color=color>
             <line
                 x1=x1
                 y1=y1

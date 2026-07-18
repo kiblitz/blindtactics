@@ -19,6 +19,7 @@ use crate::rating;
 use blindfold_core::arrow;
 use blindfold_core::mate;
 use blindfold_core::puzzle;
+use shakmaty::Position as _;
 
 /// The user's puzzle set and their place in it.
 ///
@@ -107,11 +108,30 @@ pub fn choose_near(
 pub enum Solve {
     /// The line mates against every defense. Carries the reveal.
     Solved(Vec<mate::Step>),
+    /// The line mates, but before its last arrow — so some arrows the user drew
+    /// are never played against any defense. Treated as a miss, not a solve: the
+    /// user committed to moves past the mate, which is a wrong line even though a
+    /// prefix of it mates. `mate_at` is how many arrows actually delivered the
+    /// mate, kept for tests; it is deliberately not shown, since revealing it would
+    /// leak the puzzle's depth.
+    Overshot { mate_at: usize },
     /// Some defense survives it.
     Refuted {
         defense: Vec<arrow::Arrow>,
         reason: mate::Reason,
     },
+    /// A last-rank move with no promotion piece chosen — the per-move control left
+    /// at its "no promotion" default on what is actually a pawn promotion. An
+    /// incomplete *entry*, not a wrong answer: it does not score (see [`Attempt::
+    /// submit`]), so a user who forgot to pick a piece is hinted and can fix it and
+    /// still get credit, rather than eating an unrecoverable rating loss.
+    ///
+    /// Read off the same necessary-not-sufficient geometry as the promotion control
+    /// ([`arrow::Arrow::could_be_promotion`]), so a genuinely illegal non-pawn move
+    /// sharing that geometry lands here too — the safe direction, since the worst
+    /// case is not penalising an ambiguous illegal input, and the hint's wording
+    /// ("*if* a pawn makes that move…") stays honest either way.
+    Incomplete(arrow::Arrow),
     /// We declined to find out. Not a wrong answer, and never reported as one —
     /// see [`mate::Verdict::TooComplex`]. No database puzzle can reach it.
     Unjudged(mate::Limit),
@@ -141,12 +161,37 @@ pub fn step_at(steps: &[mate::Step], ply: usize) -> Option<&mate::Step> {
 pub fn solve(puzzle: &puzzle::Puzzle, line: &[arrow::Arrow]) -> Solve {
     let position = puzzle.position().expect("the database is verified");
     match mate::judge(&position, line) {
+        // The mate arrived before the last arrow, so arrows past it are never
+        // played against any defense — the user drew moves that do not belong. A
+        // prefix mates, but the line as drawn is wrong. (`judge` returns the moment
+        // the frontier empties, so it never even resolves the surplus arrows.)
+        mate::Verdict::Mates { moves } if moves < line.len() => Solve::Overshot { mate_at: moves },
         mate::Verdict::Mates { .. } => Solve::Solved(
             mate::playback(&position, line).expect("judge just proved this line mates"),
         ),
+        // An illegal last-rank move with no piece chosen is almost always a pawn
+        // promotion the user left at the control's default, not a wrong answer. Peel
+        // it off before the generic refutation so `submit` can decline to score it.
+        mate::Verdict::Refuted {
+            reason: mate::Reason::Illegal(a),
+            ..
+        } if is_unfinished_promotion(&a, position.turn()) => Solve::Incomplete(a),
         mate::Verdict::Refuted { defense, reason } => Solve::Refuted { defense, reason },
         mate::Verdict::TooComplex { reason } => Solve::Unjudged(reason),
     }
+}
+
+/// Whether an illegal arrow looks like a pawn promotion left with no piece chosen —
+/// the per-move control at its "no promotion" default on a last-rank move.
+///
+/// The one predicate behind both [`Solve::Incomplete`] (which declines to score it)
+/// and [`explain`]'s promotion hint, so the classification and its wording cannot
+/// drift: if they disagreed, an `Incomplete` would render through `explain`'s generic
+/// "not legal" arm instead of the promotion hint. Necessary, not sufficient (see
+/// [`arrow::Arrow::could_be_promotion`]) — a non-pawn move sharing the geometry
+/// matches too, which is the safe direction for both uses.
+fn is_unfinished_promotion(a: &arrow::Arrow, solver: shakmaty::Color) -> bool {
+    a.could_be_promotion(solver) && a.promotion.is_none()
 }
 
 /// Turn a refutation into a sentence a blindfold user can act on.
@@ -164,7 +209,7 @@ pub fn solve(puzzle: &puzzle::Puzzle, line: &[arrow::Arrow]) -> Solve {
 /// piece must get the promotion hint rather than a bare "illegal".
 pub fn explain(reason: &mate::Reason, solver: shakmaty::Color) -> String {
     match reason {
-        mate::Reason::Illegal(a) if a.could_be_promotion(solver) && a.promotion.is_none() => {
+        mate::Reason::Illegal(a) if is_unfinished_promotion(a, solver) => {
             format!(
                 "Arrow {a} has no legal reading. If a pawn makes that move it has to \
                  promote — pick what it becomes."
@@ -271,31 +316,36 @@ impl Attempt {
         self.arrows.clear();
     }
 
-    /// Set the promotion piece on the arrow at `index`. A no-op if `index` is out
-    /// of range or the line is locked. Unlike a toggle, this always sets the given
-    /// role — the board's promotion popup offers a definite choice, and a cancel is
-    /// handled by removing the arrow, not by clearing its promotion.
-    pub fn set_promotion(&mut self, index: usize, role: shakmaty::Role) {
+    /// Set (or clear) the promotion piece on the arrow at `index`. A no-op if
+    /// `index` is out of range or the line is locked. `None` is a real choice, not a
+    /// cancel: the line's per-move promotion control defaults to "no promotion" and
+    /// can be set back to it, so the move stays a plain move.
+    pub fn set_promotion(&mut self, index: usize, role: Option<shakmaty::Role>) {
         if self.is_solved() {
             return;
         }
         if let Some(a) = self.arrows.get_mut(index) {
-            a.promotion = Some(role);
+            a.promotion = role;
         }
     }
 
     /// Record a verdict and, on a solve, land the reveal on the final position.
     ///
     /// Returns the [`rating::Outcome`] to apply *only* for the first definitive
-    /// submission on this puzzle — a solve or a refutation, but not an `Unjudged`
-    /// which is not the user's fault. Later submissions return `None`, so failing
-    /// and then solving still counts as the miss it was, and re-solving a puzzle
-    /// does not inflate the rating.
+    /// submission on this puzzle — a solve or a refutation, but not an `Unjudged` or
+    /// an `Incomplete`, neither of which is a wrong answer. Later submissions return
+    /// `None`, so failing and then solving still counts as the miss it was, and
+    /// re-solving a puzzle does not inflate the rating.
     pub fn submit(&mut self, verdict: Solve) -> Option<rating::Outcome> {
         let outcome = match &verdict {
             Solve::Solved(_) => Some(rating::Outcome::Solved),
-            Solve::Refuted { .. } => Some(rating::Outcome::Failed),
-            Solve::Unjudged(_) => None,
+            // An overshoot mates but with junk arrows past the mate — a wrong line,
+            // so it scores a loss like a refutation.
+            Solve::Overshot { .. } | Solve::Refuted { .. } => Some(rating::Outcome::Failed),
+            // An unfinished promotion is a fixable entry, not a wrong answer, and an
+            // `Unjudged` is not the user's fault — neither scores, and neither latches
+            // `scored`, so the corrected line can still rate.
+            Solve::Incomplete(_) | Solve::Unjudged(_) => None,
         };
         self.ply = match &verdict {
             Solve::Solved(steps) => steps.len(),

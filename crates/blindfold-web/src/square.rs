@@ -76,6 +76,26 @@ pub fn centre(sq: shakmaty::Square, orientation: Orientation) -> (f64, f64) {
     (f64::from(col) * side + half, f64::from(row) * side + half)
 }
 
+/// Shift a segment perpendicular to its own direction by `offset` viewBox units, so
+/// a move drawn more than once fans off its twin instead of hiding exactly under it.
+///
+/// Returns the endpoints unchanged when `offset` is zero (the common case — a move
+/// drawn once sits on the true line) or when the segment has no length (`from ==
+/// to`, guarded so a stray call cannot divide by zero). Here, and tested in
+/// `tests/square.rs`, because a sign slip in the perpendicular would fan arrows the
+/// wrong way — the same silent-geometry failure class this module exists to pin, and
+/// unreachable from a native test while it lived inside a Leptos component.
+pub fn fan(from: (f64, f64), to: (f64, f64), offset: f64) -> ((f64, f64), (f64, f64)) {
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    let length = dx.hypot(dy);
+    if offset == 0.0 || length == 0.0 {
+        return (from, to);
+    }
+    let (perp_x, perp_y) = (-dy / length, dx / length);
+    let shift = |(x, y): (f64, f64)| (x + perp_x * offset, y + perp_y * offset);
+    (shift(from), shift(to))
+}
+
 /// The squares of the board in the order they must be laid out, top-left first.
 ///
 /// A rendering order, not a chess one — which is why it lives here next to

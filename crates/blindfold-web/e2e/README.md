@@ -28,20 +28,21 @@ pinned puzzles):
   random puzzle would let a puzzle-specific bug pass on the retry against an unrelated
   one. The test still reads *whichever* puzzle is on screen and looks up its recorded
   solution, so it cannot drift from what the seed selects. For each pinned puzzle it
-  draws the solution by dragging on the blank board (choosing from the promotion popup
-  where a move promotes), submits, and asserts:
+  draws the solution by dragging on the blank board (setting the piece on the move's
+  per-move promotion control where a move promotes), submits, and asserts:
   - the board reveals, the verdict says "Mate", and the mating square is lit;
   - the rating moves and the `+n` delta shows it;
   - stepping all the way back lands on the empty start (nothing lit) with pieces
     still shown, and one step forward re-lights the first move — the manual reveal
     actually moves, where the frozen replay would fail both halves;
   - the page logged no errors.
-- **No-promotion exit.** Draws a move that matches promotion *geometry* but is not a
-  pawn's (a straight drag up one file into the top row, which the solver-oriented
-  board always makes a promotion-geometry move). Asserts the picker opens, that
-  Submit is disabled while it is open, and that the "Move without promoting" exit
-  keeps the arrow as a plain move — the ~14% of puzzles whose key is a non-pawn move
-  to the last rank depend on this.
+- **Last-rank non-pawn move.** Draws a move that matches promotion *geometry* but is
+  not a pawn's (a straight drag up one file into the top row, which the solver-oriented
+  board always makes a promotion-geometry move). Promotion is a per-move control in the
+  line list, not a modal, so the move enters straight away as a plain move: it asserts
+  the arrow lands, Submit is enabled (nothing is left unresolved behind a picker), and
+  the move's promotion control sits at its "no promotion" default — the ~14% of puzzles
+  whose key is a non-pawn move to the last rank depend on this staying enterable.
 
 The solutions come from all four committed `database/mate_in_*.jsonl` files, read
 off disk, so the test cannot drift from what the app was built with.

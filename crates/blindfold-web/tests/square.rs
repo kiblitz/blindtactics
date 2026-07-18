@@ -181,3 +181,39 @@ fn layout_starts_at_the_top_left_corner() {
     assert_eq!(square::in_layout_order(WHITE)[0], shakmaty::Square::A8);
     assert_eq!(square::in_layout_order(BLACK)[0], shakmaty::Square::H1);
 }
+
+/// `fan` shifts a segment perpendicular to itself by the whole offset, keeping its
+/// length and direction — the property duplicate arrows rely on. Pinned here rather
+/// than left inside the arrow component because a sign slip in the perpendicular is
+/// exactly the silent-geometry bug this file guards against.
+#[test]
+fn fan_shifts_perpendicular_and_preserves_the_segment() {
+    // A horizontal rightward segment: the perpendicular is vertical, so both ends
+    // move by the full offset in y and not at all in x.
+    let (from, to) = ((100.0, 100.0), (300.0, 100.0));
+    let (a, b) = square::fan(from, to, 25.0);
+    assert_eq!(a, (100.0, 125.0));
+    assert_eq!(b, (300.0, 125.0));
+
+    // Length is preserved (a shift, not a scale), for an arbitrary diagonal.
+    let (from, to) = ((40.0, 60.0), (200.0, 340.0));
+    let (a, b) = square::fan(from, to, 25.0);
+    let len = |(px, py): (f64, f64), (qx, qy): (f64, f64)| (qx - px).hypot(qy - py);
+    assert!(
+        (len(a, b) - len(from, to)).abs() < 1e-9,
+        "fanning must not stretch the shaft"
+    );
+    // Each endpoint moved exactly the offset from where it started.
+    assert!((len(from, a) - 25.0).abs() < 1e-9);
+    assert!((len(to, b) - 25.0).abs() < 1e-9);
+}
+
+/// A zero offset (a move drawn once) and a zero-length segment (`from == to`) both
+/// return the endpoints untouched — the latter guarding the perpendicular's divide
+/// against a zero magnitude.
+#[test]
+fn fan_leaves_a_zero_offset_or_zero_length_segment_alone() {
+    let (from, to) = ((100.0, 100.0), (300.0, 220.0));
+    assert_eq!(square::fan(from, to, 0.0), (from, to));
+    assert_eq!(square::fan(from, from, 25.0), (from, from));
+}

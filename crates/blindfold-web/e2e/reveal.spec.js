@@ -85,27 +85,6 @@ async function squareCentre(page, board, name) {
   };
 }
 
-// Draw one arrow the way a user does: press on `from`, drag to `to`, release. If
-// the UCI carries a promotion suffix, pick the piece from the board popup that
-// appears at the destination square.
-// Mirror of `arrow::Arrow::could_be_promotion` for a solver move. `promoRank` is
-// the solver's promotion rank ("8" for a white solver, "1" for a black one, read
-// off the board's orientation), so a solver move matches only its own colour's
-// pattern — no false positives that would wait for a picker that never opens.
-function couldBePromotion(uci, promoRank) {
-  const fromRank = promoRank === "8" ? "7" : "2";
-  const straightOrOneOver = Math.abs(uci.charCodeAt(0) - uci.charCodeAt(2)) <= 1;
-  return uci[1] === fromRank && uci[3] === promoRank && straightOrOneOver;
-}
-
-// The solver's promotion rank, from the board's own orientation: the board is drawn
-// from the solver's side, so the top-left square is a8 for a white solver (rank 8)
-// and h1 for a black one (rank 1).
-async function solverPromotionRank(page) {
-  const topLeft = await page.locator(".square").first().getAttribute("data-square");
-  return topLeft[1];
-}
-
 // Whether a UCI already carries a promotion piece — its 5th character, as in
 // "g7g8q". Plain moves, castles (`e1g1`), and en passant are four characters, so
 // the slot is absent. One predicate for both the picker logic and the coverage
@@ -114,27 +93,25 @@ function hasPromotion(uci) {
   return Boolean(uci[4]);
 }
 
-// Draw one arrow, resolving the promotion picker when the move opens one.
+// Draw one arrow, then set its promotion piece if the UCI carries one.
 //
-// Two independent robustness needs. First, the drag is retried until the line gains
-// its arrow. This is only insurance against a rare synthetic-input drop — the
-// failure that actually bit here was a drag endpoint below the fold registering on
-// no square, deterministically, for any puzzle reaching the lower ranks, and that is
-// closed by sizing the viewport to the whole board (see playwright.config.js). The
-// retry re-reads the count at the top of each attempt: a drag that has registered
-// by then is detected and not redrawn, which would double the arrow and never match.
-// The generous timeout makes it very unlikely a registration outruns that check;
-// were one to (a render slower than the timeout), the post-loop count guard turns it
-// into a loud failure rather than a silent duplicate. Second, when the move matches promotion
-// geometry the picker *must* be dismissed — it is modal, so a stray-open picker makes
-// every later drag bail — and whether it opens is predicted from geometry rather than
-// a racy DOM read (the picker and the line update in separate effects), with the
-// dismissing click auto-waiting for the button to render.
-async function drawArrow(page, board, uci, promoRank) {
+// The drag is retried until the line gains its arrow. This is only insurance against
+// a rare synthetic-input drop — the failure that actually bit here was a drag
+// endpoint below the fold registering on no square, deterministically, for any
+// puzzle reaching the lower ranks, and that is closed by sizing the viewport to the
+// whole board (see playwright.config.js). The retry re-reads the count at the top of
+// each attempt: a drag that has registered by then is detected and not redrawn,
+// which would double the arrow and never match. The generous timeout makes it very
+// unlikely a registration outruns that check; were one to (a render slower than the
+// timeout), the post-loop count guard turns it into a loud failure rather than a
+// silent duplicate.
+//
+// Promotion is no longer a board modal: a last-rank move grows a per-move control in
+// the line list that defaults to "no promotion", so a plain move (or a rook lift to
+// the last rank) needs no action, and a real promotion just presses its piece there.
+async function drawArrow(page, board, uci) {
   const steps = page.locator(".line__step");
   const before = await steps.count();
-  const suffix = uci[4];
-  const opensPicker = hasPromotion(uci) || couldBePromotion(uci, promoRank);
 
   for (let attempt = 0; attempt < DRAG_RETRIES; attempt++) {
     // A prior attempt's drag may have registered late — if the arrow is already
@@ -158,15 +135,10 @@ async function drawArrow(page, board, uci, promoRank) {
     throw new Error(`arrow ${uci} did not register: line has ${after}, expected ${before + 1}`);
   }
 
-  if (opensPicker) {
-    const picker = page.locator(".promotion-picker");
-    if (suffix) {
-      const name = { q: "queen", r: "rook", b: "bishop", n: "knight" }[suffix];
-      await picker.getByRole("button", { name }).click();
-    } else {
-      await page.getByRole("button", { name: "Move without promoting" }).click();
-    }
-    await expect(picker).toHaveCount(0);
+  const suffix = uci[4];
+  if (suffix) {
+    const name = { q: "queen", r: "rook", b: "bishop", n: "knight" }[suffix];
+    await steps.nth(before).locator(".line__promote").getByRole("button", { name }).click();
   }
 }
 
@@ -187,12 +159,12 @@ function collectErrors(page) {
   return errors;
 }
 
-// The puzzle on screen, read from its own `.facts` id span — never assume an
-// ordering. The id is its own span; read that rather than the whole panel, whose
-// spans concatenate without separators ("id 373a2rating 1100...").
+// The puzzle on screen, read from its own `.facts` line — never assume an ordering.
+// The facts line is now just the id, prefixed with a subtle "#" (see the `Facts`
+// component); strip it to get the bare id the database is keyed by.
 async function currentSolution(page, solutions) {
-  const idText = (await page.locator(".facts span", { hasText: "id " }).textContent()) ?? "";
-  const id = idText.replace(/^id\s+/, "").trim();
+  const idText = (await page.locator(".facts").textContent()) ?? "";
+  const id = idText.replace(/^#/, "").trim();
   const line = solutions.get(id);
   expect(line, `puzzle ${id} must be in the committed database`).toBeTruthy();
   return line;
@@ -253,8 +225,7 @@ for (const { seed, note, expectSuffix } of REVEAL_CASES) {
     const board = await page.locator(".board").boundingBox();
     if (!board) throw new Error("the board has no box");
     await assertBoardFitsViewport(page, board);
-    const promoRank = await solverPromotionRank(page);
-    for (const uci of line) await drawArrow(page, board, uci, promoRank);
+    for (const uci of line) await drawArrow(page, board, uci);
     expect(await page.locator(".line__step").count()).toBe(line.length);
 
     await page.getByRole("button", { name: "Submit", exact: true }).click();
@@ -295,11 +266,13 @@ for (const { seed, note, expectSuffix } of REVEAL_CASES) {
 }
 
 // A move that matches promotion *geometry* but is not a pawn — a rook lift like
-// Rf7-f8#, which 14% of the database needs. The picker opens off geometry alone
-// (`could_be_promotion` is necessary, not sufficient), so it must offer a way to
-// finish the move without promoting, and it must not let the panel submit an
-// unresolved move behind it. Without the "no promotion" exit those puzzles cannot
-// be entered as the plain, legal move they are.
+// Rf7-f8#, which 14% of the database needs. Promotion is no longer a board modal
+// that hijacks the move; it is a per-move control in the line list that defaults to
+// "no promotion". So a last-rank non-pawn move enters immediately as the plain,
+// legal move it is — nothing interrupts the drag, submit is never blocked, and the
+// control simply sits at its default. This guards the regression the old modal
+// caused: those 14% of puzzles were unenterable because the modal's only exits were
+// "pick a piece" (illegal) or "cancel" (throws the move away).
 //
 // The drag is puzzle-independent: the board is always drawn from the solver's
 // side, so the solver promotes toward the *top* of the screen. A straight drag up
@@ -317,33 +290,33 @@ test("a last-rank move that is not a promotion can still be entered", async ({ p
   const fileX = board.x + 4.5 * (board.width / BOARD_SIDE);
   const from = { x: fileX, y: board.y + 1.5 * (board.height / BOARD_SIDE) };
   const to = { x: fileX, y: board.y + 0.5 * (board.height / BOARD_SIDE) };
-  // Retry until the drag registers (fast simulated drags occasionally drop) — a
-  // registered promotion-geometry drag always opens the picker.
-  const picker = page.locator(".promotion-picker");
+  const steps = page.locator(".line__step");
+  // Retry until the drag registers (fast simulated drags occasionally drop).
   for (let attempt = 0; attempt < DRAG_RETRIES; attempt++) {
     await page.mouse.move(from.x, from.y);
     await page.mouse.down();
     await page.mouse.move(to.x, to.y, { steps: 8 });
     await page.mouse.up();
-    const opened = await expect(picker)
-      .toBeVisible({ timeout: DRAG_TIMEOUT_MS })
+    const landed = await expect(steps)
+      .toHaveCount(1, { timeout: DRAG_TIMEOUT_MS })
       .then(() => true)
       .catch(() => false);
-    if (opened) break;
+    if (landed) break;
   }
 
-  // The picker opens on the geometry alone.
-  await expect(picker).toBeVisible();
-  // While it is open the move is unresolved, so the panel must not submit it.
-  await expect(page.getByRole("button", { name: "Submit", exact: true })).toBeDisabled();
-
-  // The move can be finished as a plain, non-promoting move — the exit the modal
-  // was missing. The arrow stays; it just carries no promotion piece.
-  await page.getByRole("button", { name: "Move without promoting" }).click();
-  await expect(picker).toHaveCount(0);
-  expect(await page.locator(".line__step").count()).toBe(1);
-  expect(await page.locator(".line__promotion").count()).toBe(0);
+  // The move enters straight away, with no modal to dismiss — and the panel can
+  // submit it, because nothing is left unresolved behind a picker.
+  await expect(steps).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Submit", exact: true })).toBeEnabled();
+
+  // Its per-move promotion control is present (the geometry matches) but sits at its
+  // "no promotion" default, so the arrow carries no promotion piece.
+  const control = steps.first().locator(".line__promote");
+  await expect(control).toHaveCount(1);
+  await expect(control.getByRole("button", { name: "No promotion" })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
 
   expect(errors).toEqual([]);
 });

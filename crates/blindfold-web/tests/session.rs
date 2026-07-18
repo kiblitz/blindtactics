@@ -147,6 +147,84 @@ fn a_line_cut_short_is_refuted_with_a_named_defense() {
     }
 }
 
+/// A line that mates but then keeps going is not a solve. `judge` returns as soon
+/// as the frontier empties, so on a mate-in-1 the line `[key, junk]` mated at move
+/// 1 and the trailing arrow was never examined — the app happily accepted it. A
+/// user who draws moves past the mate has drawn a wrong line, so this must be a miss.
+#[test]
+fn a_line_that_overshoots_the_mate_is_not_a_solve() {
+    let p = puzzle_of_depth(1);
+    let mut line = p.solution.clone();
+    // An extra arrow that can never be played: after the mate the game is over, so
+    // its content is irrelevant — `judge` never resolves it.
+    line.push(arrow(shakmaty::Square::A1, shakmaty::Square::A2));
+    match session::solve(&p, &line) {
+        session::Solve::Overshot { mate_at } => assert_eq!(mate_at, 1),
+        other => panic!("a line with arrows past the mate must not solve: {other:?}"),
+    }
+}
+
+/// An overshoot scores a loss (the line was wrong) and does not reveal the board.
+#[test]
+fn an_overshoot_scores_a_loss_and_does_not_reveal() {
+    let mut a = session::Attempt::new();
+    assert_eq!(
+        a.submit(session::Solve::Overshot { mate_at: 1 }),
+        Some(rating::Outcome::Failed)
+    );
+    assert!(
+        !a.is_solved(),
+        "an overshoot is a miss, so the board stays blind"
+    );
+    assert_eq!(a.ply(), 0);
+}
+
+/// A pawn promotion left at the per-move control's "no promotion" default is an
+/// incomplete entry, not a wrong answer. It must not score — and crucially must not
+/// latch `scored` — so a user who forgot to pick a piece can fix it and still get
+/// credit, rather than eating an unrecoverable rating loss. (Before this, the
+/// unresolved move judged as `Refuted { Illegal }`, scored a `Failed`, and latched,
+/// so the corrected mate then returned `None` and never rated.)
+#[test]
+fn an_unfinished_promotion_is_not_scored_and_does_not_latch() {
+    let p = database()
+        .into_iter()
+        .find(|p| p.solution.iter().any(|a| a.promotion.is_some()))
+        .expect("the embedded database holds a puzzle whose key is a promotion");
+
+    // Exactly what a user who ignored the promotion control submits: the right line
+    // with the promotion piece blanked off the promoting arrow.
+    let unfinished: Vec<arrow::Arrow> = p
+        .solution
+        .iter()
+        .map(|a| arrow::Arrow {
+            promotion: None,
+            ..*a
+        })
+        .collect();
+
+    assert!(
+        matches!(
+            session::solve(&p, &unfinished),
+            session::Solve::Incomplete(_)
+        ),
+        "an unfinished promotion is classified as incomplete, not refuted"
+    );
+
+    let mut a = session::Attempt::new();
+    assert_eq!(
+        a.submit(session::solve(&p, &unfinished)),
+        None,
+        "an unfinished promotion does not score"
+    );
+    assert!(!a.is_solved(), "and does not reveal the board");
+    assert_eq!(
+        a.submit(session::solve(&p, &p.solution)),
+        Some(rating::Outcome::Solved),
+        "picking the piece and resubmitting the real mate still scores the win"
+    );
+}
+
 fn solved_steps() -> Vec<mate::Step> {
     let p = puzzle_of_depth(3);
     match session::solve(&p, &p.solution) {
@@ -265,23 +343,29 @@ fn a_solved_line_is_locked_against_edits() {
     a.draw(arrow(shakmaty::Square::D2, shakmaty::Square::D4));
     a.undo();
     a.clear();
-    a.set_promotion(0, shakmaty::Role::Queen);
+    a.set_promotion(0, Some(shakmaty::Role::Queen));
     assert_eq!(a.arrows().len(), 1, "edits are ignored once solved");
 }
 
 #[test]
-fn set_promotion_sets_and_replaces() {
+fn set_promotion_sets_replaces_and_clears() {
     let mut a = session::Attempt::new();
     a.draw(arrow(shakmaty::Square::G7, shakmaty::Square::G8));
-    a.set_promotion(0, shakmaty::Role::Queen);
+    a.set_promotion(0, Some(shakmaty::Role::Queen));
     assert_eq!(a.arrows()[0].promotion, Some(shakmaty::Role::Queen));
-    a.set_promotion(0, shakmaty::Role::Rook);
+    a.set_promotion(0, Some(shakmaty::Role::Rook));
     assert_eq!(
         a.arrows()[0].promotion,
         Some(shakmaty::Role::Rook),
         "a different role replaces the choice"
     );
-    a.set_promotion(5, shakmaty::Role::Queen); // out of range: must not panic
+    a.set_promotion(0, None);
+    assert_eq!(
+        a.arrows()[0].promotion,
+        None,
+        "`None` clears back to no promotion — the control's default"
+    );
+    a.set_promotion(5, Some(shakmaty::Role::Queen)); // out of range: must not panic
 }
 
 /// A solve scores a win, and only the first submission on the puzzle counts.

@@ -141,10 +141,11 @@ blindfold-chess-trainer/
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 47 tests (+ 3 Playwright tests in one spec, run as 4
+- `blindfold-web` — built, 52 tests (+ 3 Playwright tests in one spec, run as 4
   cases — the reveal test runs on two pinned puzzles), clippy clean. Blank board,
-  drag-drawn numbered arrows, roster panel with real piece artwork, an inline
-  promotion picker, a hover highlight, submit, and a static reveal stepped through by
+  drag-drawn numbered arrows each in its own colour, roster panel with real piece
+  artwork, a per-move promotion control, a hover highlight, submit, and a static
+  reveal stepped through by
   hand (◀/▶, Lichess-analysis style — no timer, no auto-advancing animation; the
   board still fades in on reveal). The puzzle is never
   labelled with its mate depth; puzzles are drawn at random from a pool near the
@@ -203,7 +204,7 @@ a thread pool, and a file writer, and nothing worth a test.
 no toolchain. Anything that can live in core, must.
 
 The web crate should contain almost no logic worth testing *in its components*. That it has
-47 tests anyway is not a contradiction: they cover `square`, `session`, `rating` and
+52 tests anyway is not a contradiction: they cover `square`, `session`, `rating` and
 `database`, the crate's Leptos-free parts, which is exactly where its logic was pushed so a
 native test could reach it. The rule bites on `board`/`panel`/`line`/`app` — if a test wants
 to reach into one of those, the thing it wants is in the wrong module.
@@ -246,16 +247,18 @@ its only consumer. That is the line; it is not "no strings in core".
 ### `blindfold-web` modules
 
 - `square` — the app's only arithmetic: which square a pointer is over, where a square
-  is on screen. **No Leptos in it**, so it is tested natively. Read its doc before
-  touching orientation.
+  is on screen, and `fan` (the perpendicular shift that fans duplicate arrows apart).
+  **No Leptos in it**, so it is tested natively. Read its doc before touching orientation.
 - `session` — two Leptos-free state machines plus the pure helpers that feed them.
   `Session { puzzles, at }` is *which* puzzle, and its `choose_near(puzzles, rating,
   exclude, r)` is the adaptive picker — sort by rating distance, take the nearest
   `SELECTION_POOL`, index by a caller-supplied random `r` — a pure function so the app
   supplies `Math::random()` and a native test supplies a fixed number. `Attempt {
-  arrows, solve, ply, scored }` is *this* attempt: draw/undo/clear/set_promotion,
-  `submit` (one `judge` call, returns `Some(Outcome)` only on the first scoring
-  submission so a miss-then-solve cannot re-score), and the manual reveal cursor
+  arrows, solve, ply, scored }` is *this* attempt: draw/undo/clear/set_promotion
+  (which takes `Option<Role>`, so "no promotion" is a real value the per-move control
+  sets, not the absence of a call), `submit` (one `judge` call, returns `Some(Outcome)`
+  only on the first scoring submission so a miss-then-solve cannot re-score), and the
+  manual reveal cursor
   (`step_back`/`step_forward`/`can_step_back`/`can_step_forward`, plus `step_at` for
   the replay's off-by-one). `explain` renders a refutation as a sentence. All native,
   because this is where the logic was pushed so `line`/`app` need none.
@@ -299,8 +302,9 @@ that clicking a real button actually moves the board — is checked by driving c
 Playwright. That driver is **checked in**: `crates/blindfold-web/e2e/reveal.spec.js`, run by
 CI. It draws a real solution, submits, steps all the way back to the empty start (nothing
 lit, pieces still shown), then one step forward, and asserts the first move re-lights — a
-reveal that did not actually move fails both halves. A third test guards the promotion
-picker's "no promotion" exit (see "Promotion" below).
+reveal that did not actually move fails both halves. A third test guards that a last-rank
+non-pawn move is still enterable now that promotion is a per-move control (see "Promotion"
+below).
 
 **Two e2e traps this cost real time on, both about the *harness*, not the app.** First,
 the board is an `aspect-ratio: 1` box below the masthead, so at Playwright's default 720px
@@ -329,26 +333,69 @@ whole premise of an `Arrow`.
 So `arrow::Arrow::could_be_promotion` asks the question answerable from the drag alone: a
 pawn steps off the rank below onto the last one, straight or one file sideways.
 **Necessary, not sufficient** — a rook on g7 dragged to g8 satisfies it and gets an
-unwanted picker. That is the honest cost of not guessing, and it is cheap.
+unwanted control. That is the honest cost of not guessing, and it is cheap.
 
-The first cut used "lands on the last rank" and put a promotion picker beside *both*
+The first cut used "lands on the last rank" and put a promotion control beside *both*
 moves of a rook mate-in-2. The narrower condition is not a heuristic; it is a strictly
 necessary precondition, which is why it is allowed.
 
-**Because the picker fires on a necessary-not-sufficient condition, it must have a "no
-promotion" exit — and this was got wrong once, badly.** The first inline picker was modal
-with only two ways out: pick a piece, or click away to *delete* the arrow. For the rook
-lift `Rf7-f8#` that is a trap — the only legal move it lets you enter is the illegal
-promoting one, and cancelling throws the move away. **57 puzzles, 14% of the database,
-have a solver key that is a non-pawn move to the last rank** (measured; 9 of them
-mate-in-1), and every one was unenterable. The picker now offers Q/R/B/N *and* a "no
-promotion" choice that keeps the plain move, with click-away still cancelling. While it is
-open the panel's submit controls are disabled — the picker opens on geometry alone, so an
-unresolved move behind it must not be judged (that too was a bug: submit reached past the
-board-only backdrop and scored a loss for a move still being entered). The lifted
-`promoting` signal in `app.rs` is what lets the panel see the choice is pending. Guarded by
-`reveal.spec.js`'s promotion test, which draws a last-rank non-pawn move and proves it can
-still be entered as the plain move it is.
+**Promotion is a per-move control in the line list, defaulting to "no promotion" — not a
+board modal.** This is the second design, and it exists because the first was a trap. The
+first was a modal picker on the *board*, with only two ways out: pick a piece, or click
+away to *delete* the arrow. For a last-rank non-pawn move like the rook lift `Rf7-f8#` that
+is unenterable — the only move it lets you commit is the illegal promoting one, and
+cancelling throws the move away. **57 puzzles, 14% of the database, have a solver key that
+is a non-pawn move to the last rank** (measured; 9 of them mate-in-1), and every one was
+stuck behind that modal. It also fired the modal on a rook the user was mid-drag and, in an
+early version, let submit reach past the board-only backdrop and score a loss for a move
+still being entered.
+
+The per-move control removes the modal entirely. A last-rank drag draws a plain move
+immediately; the line's `Step` then grows a small row of buttons — "—" (no promotion, the
+default) plus Q/R/B/N — via `line::Promote`, and the choice edits the arrow's `promotion`
+field through the lifted `on_promote` callback in `app.rs`. So a rook lift is just a plain
+move with the control sitting at its default, a real pawn promotion presses its piece, and
+nothing ever blocks submit or hijacks the drag. `board.rs` no longer knows about promotion
+at all — it draws geometry and reports the drag; the whole choice lives in the line panel.
+Guarded by `reveal.spec.js`'s last-rank-non-pawn test (the move enters, submit stays
+enabled, the control sits at "no promotion") and its promotion-piece path (a real promotion
+sets its piece on the per-move control).
+
+**An unfinished promotion is not a wrong answer.** Because the control defaults to "no
+promotion" and submit is always enabled, a real pawn promotion left at that default is an
+easy accidental submit — and the move is then illegal (a pawn *must* promote). Scoring it a
+loss would be doubly wrong: the user forgot to click a piece, not misread the mate, and
+`scored` latches, so fixing it and resubmitting the correct mate would return `None` and
+never rate. So `session::solve` peels `Refuted { Illegal(a) }` where `a.could_be_promotion &&
+a.promotion.is_none()` off into `Solve::Incomplete`, which `submit` declines to score (no
+rating change, no latch) and the panel phrases as a neutral hint to pick a piece. The same
+`could_be_promotion` geometry is necessary-not-sufficient, so a genuinely illegal non-pawn
+move sharing it lands here too — the safe direction (never penalise an ambiguous illegal
+input), and the hint's "*if* a pawn makes that move…" wording stays honest either way. Pinned
+by `session.rs`'s `an_unfinished_promotion_is_not_scored_and_does_not_latch`.
+
+### Arrows are coloured per move, and duplicates fan apart
+
+Each drawn arrow takes its own colour, cycled by position from `constants::ARROW_COLORS`
+(eight mid-saturation hues), so a multi-move line reads as distinct numbered arrows rather
+than a tangle of identical amber ones. The badge number is white with a dark outline
+(`paint-order: stroke` in `styles.css`) so it stays legible on every hue on both themes —
+no single fill reads on all eight. The in-flight ghost arrow keeps the board's base amber.
+
+The one shared arrowhead `<marker>` paints with `fill="context-stroke"`, not a fixed fill,
+so it takes whatever colour the referencing arrow strokes with. `currentColor` would not
+work here: a marker resolves `currentColor` at its `<defs>` position, ignoring the per-arrow
+`style:color`, so every head would come out amber. `context-stroke` is the SVG feature that
+reaches the referencing element's stroke instead.
+
+A move drawn more than once (legal, and sometimes needed for a variation) is fanned
+perpendicular off its twins by `constants::ARROW_DUP_OFFSET` per duplicate, so both stay
+visible instead of the later one hiding exactly under the earlier. The fan counts how many
+earlier arrows share the same from/to; the first sits on the true line, each duplicate steps
+a quarter-square to the side. The perpendicular shift itself is `square::fan`, not inline in
+the arrow component — a sign slip there fans arrows the wrong way, the same silent-geometry
+failure class the rest of `square` exists to pin, so it is tested natively alongside
+`centre`/`cell`.
 
 ### The roster gate — why curation filters on size
 
@@ -469,6 +516,26 @@ where they cannot see that they were right. Playing out is semantically correct 
 the multiple-solution question moot. Note this means **duals are harmless** and we do not
 filter for uniqueness. Minimality (`min_depth`) is still enforced, because that is about
 *labelling*: a mate-in-2 must not be advertised as a mate-in-4.
+
+### A line that overshoots the mate is a miss — and `judge` will not tell you on its own
+
+`judge` returns `Verdict::Mates { moves }` where `moves` is the ply the mate lands on, and
+**that can be fewer than the arrows drawn.** The mate ends the game, so any arrows after it
+are never played and never examined — `judge` stops the moment it is mated. For *curation*
+and *playback* that is exactly right (the stored line is minimal, the reveal walks only the
+real plies). For the *app's submit* it is a trap: a user who draws the correct mate and then
+one wrong arrow past it gets `Mates { moves }` with `moves < arrows.len()`, and treating any
+`Mates` as a solve would score that overshoot as correct — the real bug reported on `4frGn`
+(`a7a8` then a wrong `a8b8`).
+
+So the app, not core, distinguishes it: `session::solve` maps `Mates { moves } if moves <
+line.len()` to `Solve::Overshot`, which `submit` scores as `Outcome::Failed` (rating drops,
+no re-score) and the verdict phrases as "too many moves" — **without naming the move count,
+which would leak the puzzle's depth.** This lives in the app layer on purpose: `judge` must
+stay the pure function curation depends on, and curation *wants* the early-stop, because it
+feeds `judge` an already-minimal line. Pinned by `session.rs`'s
+`a_line_that_overshoots_the_mate_is_not_a_solve` and `an_overshoot_scores_a_loss_and_does_
+not_reveal`.
 
 ### shakmaty gotchas that cost real time
 

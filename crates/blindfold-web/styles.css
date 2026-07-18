@@ -383,9 +383,17 @@ body {
 }
 
 /* Size and baseline come from `constants`, not from here: they are tuned against
- * `ARROW_BADGE_RADIUS`, which is Rust's. */
+ * `ARROW_BADGE_RADIUS`, which is Rust's.
+ *
+ * White with a dark outline rather than a single contrasting colour: the badge is
+ * now one of eight arrow colours (`ARROW_COLORS`), so no one fill reads on all of
+ * them. The stroke is painted under the fill (`paint-order`) so it thickens the
+ * glyph's edge without eating into it. */
 .arrow__number {
-  fill: var(--on-amber);
+  fill: #fff;
+  stroke: rgba(0, 0, 0, 0.55);
+  stroke-width: 3px;
+  paint-order: stroke;
   font-family: var(--mono);
   font-weight: 700;
   text-anchor: middle;
@@ -410,10 +418,8 @@ body {
 
 /* ---- under the board --------------------------------------------------- */
 
+/* Just the puzzle id now, kept small and muted for bug reports. */
 .facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1.1rem;
   margin: 0.4rem 0 0;
   font-size: 0.7rem;
   color: var(--chalk-faint);
@@ -553,87 +559,48 @@ body {
   padding: 0 0.2rem;
 }
 
-/* The chosen promotion piece, shown (not chosen) at the end of a line step — the
- * choice itself is made on the board, in the popup below. */
-.line__promotion {
-  display: block;
-  width: 1.15rem;
-  height: 1.15rem;
+/* The per-move promotion control, shown only for a last-rank move. Pushed to the
+ * right end of the step; defaults to the "—" (no promotion) button pressed, so a
+ * rook lift to the last rank reads as the plain move it is. */
+.line__promote {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
   margin-left: auto;
 }
 
-.line__promotion svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-/* ---- board promotion popup --------------------------------------------- */
-
-.board__promotion {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-}
-
-/* Dims the board and catches any click outside the pieces, which cancels. */
-.promotion-backdrop {
-  position: absolute;
-  inset: 0;
-  background: color-mix(in srgb, var(--ink) 55%, transparent);
-}
-
-/* A column of choices dropping from the promotion square. On the board's light
- * wood in both themes, so black pieces read as clearly as white ones — the same
- * reason the roster rims its black pieces. */
-.promotion-picker {
-  position: absolute;
-  display: flex;
-  flex-direction: column;
-  background: var(--square-light);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
-}
-
-.promotion-picker__choice {
+.line__promote-choice {
   display: grid;
   place-items: center;
-  width: 100%;
-  aspect-ratio: 1;
-  padding: 6%;
-  border: none;
+  width: 1.35rem;
+  height: 1.35rem;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: 4px;
   background: transparent;
+  color: var(--chalk-dim);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1;
   cursor: pointer;
-  transition: background-color 0.12s;
+  transition: background-color 0.12s, border-color 0.12s;
 }
 
-.promotion-picker__choice:hover {
-  background: color-mix(in srgb, var(--amber) 30%, var(--square-light));
+.line__promote-choice:hover {
+  background: color-mix(in srgb, var(--amber) 18%, transparent);
 }
 
-.promotion-picker__choice svg {
+/* The chosen piece (or "no promotion") sits pressed, so the current state is
+ * legible without opening anything. */
+.line__promote-choice--on {
+  border-color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 22%, transparent);
+}
+
+.line__promote-choice svg {
   display: block;
   width: 100%;
   height: 100%;
-}
-
-/* The "no promotion" exit, for a move that only matched promotion geometry. */
-.promotion-picker__plain {
-  width: 100%;
-  padding: 0.3rem 0.15rem;
-  border: none;
-  border-top: 1px solid var(--line);
-  background: transparent;
-  color: var(--chalk-dim);
-  font-size: 0.6rem;
-  line-height: 1.15;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  cursor: pointer;
-  transition: background-color 0.12s;
-}
-
-.promotion-picker__plain:hover {
-  background: color-mix(in srgb, var(--amber) 30%, var(--square-light));
 }
 
 /* ---- controls ---------------------------------------------------------- */

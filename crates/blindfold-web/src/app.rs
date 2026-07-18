@@ -26,13 +26,6 @@ pub fn App() -> impl IntoView {
     // native test can reach — see `session::Attempt`.
     let attempt = RwSignal::new(session::Attempt::new());
 
-    // A promotion choice in progress: the popup's square and the provisional
-    // arrow's index. Lifted out of the board so submission can be blocked while it
-    // is open — the picker opens on geometry alone, so an unresolved move behind it
-    // must not be judged.
-    let promoting: board::Promoting = RwSignal::new(None);
-    let choosing = Signal::derive(move || promoting.get().is_some());
-
     // `Memo`, not `Signal::derive`: each caches its value and clones only the
     // current puzzle (via `session.with`), not the whole 400-puzzle `Session`, and
     // only recomputes when the puzzle actually changes.
@@ -66,10 +59,6 @@ pub fn App() -> impl IntoView {
         session.update(|s| s.advance(rating_now, r));
         attempt.update(session::Attempt::reset);
         elo_delta.set(None);
-        // Provably already `None` here (a puzzle only advances once solved, and the
-        // picker cannot be open on a solved board), but cleared anyway so the "no
-        // stale picker across puzzles" invariant is not spread across three modules.
-        promoting.set(None);
     };
 
     let submit = move |_| {
@@ -95,7 +84,7 @@ pub fn App() -> impl IntoView {
     let draw = move |arrow: arrow::Arrow| attempt.update(|a| a.draw(arrow));
     let undo = move |()| attempt.update(session::Attempt::undo);
     let clear = move |()| attempt.update(session::Attempt::clear);
-    let promote = move |(index, role): (usize, shakmaty::Role)| {
+    let promote = move |(index, role): (usize, Option<shakmaty::Role>)| {
         attempt.update(|a| a.set_promotion(index, role))
     };
     let step_back = move |()| attempt.update(session::Attempt::step_back);
@@ -160,9 +149,6 @@ pub fn App() -> impl IntoView {
                                 orientation=orientation
                                 drawn=drawn
                                 on_draw=Callback::new(draw)
-                                on_promote=Callback::new(promote)
-                                on_cancel=Callback::new(undo)
-                                promoting=promoting
                                 revealed=revealed
                                 highlight=highlight
                                 locked=locked
@@ -186,10 +172,10 @@ pub fn App() -> impl IntoView {
                                 solve=solve
                                 can_back=can_back
                                 can_forward=can_forward
-                                choosing=choosing
                                 on_undo=Callback::new(undo)
                                 on_clear=Callback::new(clear)
                                 on_submit=Callback::new(submit)
+                                on_promote=Callback::new(promote)
                                 on_next=Callback::new(next)
                                 on_step_back=Callback::new(step_back)
                                 on_step_forward=Callback::new(step_forward)
@@ -257,29 +243,15 @@ fn RatingBar(
     }
 }
 
-/// The puzzle's provenance, under the board.
+/// The puzzle's id, small and muted under the board.
 ///
-/// The id is here so a user who hits something odd can report *which* puzzle, and
-/// so it can be looked up in the committed database. Rating is Lichess's, and
-/// measures how hard the mate is to find with the board in front of you — which is
-/// not the same as how hard this is, hence the square count beside it: that is the
-/// blindfold cost, and it is what curation actually gates on. The mate depth is
-/// deliberately absent — a puzzle never says how many moves it takes.
+/// Kept only so a user who hits something odd can report *which* puzzle, and look
+/// it up in the committed database. Everything else that used to sit here is gone
+/// on purpose: the rating is a difficulty hint, the square count read as clutter,
+/// and the mate depth is the very thing the trainer withholds.
 #[component]
 fn Facts(session: RwSignal<session::Session>) -> impl IntoView {
     view! {
-        <p class="facts mono">
-            {move || {
-                session.with(|s| {
-                    let p = s.current();
-                    let squares = roster::of(&p.position().expect("verified")).squares();
-                    view! {
-                        <span>{format!("id {}", p.id)}</span>
-                        <span>{format!("rating {}", p.rating)}</span>
-                        <span>{format!("{squares} squares to hold")}</span>
-                    }
-                })
-            }}
-        </p>
+        <p class="facts mono">{move || format!("#{}", session.with(|s| s.current().id.clone()))}</p>
     }
 }
