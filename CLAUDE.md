@@ -141,16 +141,21 @@ blindfold-chess-trainer/
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 57 tests (+ 4 Playwright tests in one spec, run as 5
-  cases — the reveal test runs on two pinned puzzles), clippy clean. Blank board,
+- `blindfold-web` — built, 66 tests (+ 6 Playwright tests across two projects, run as
+  7 cases — the reveal test runs on two pinned puzzles, and a `mobile` project runs a
+  touch spec on a phone viewport), clippy clean. Blank board,
   drag-drawn numbered arrows each in its own colour, roster panel with real piece
   artwork, a per-move promotion control, a hover highlight, a board flip and a
   settings menu whose one setting is the point of view (to move / white / black),
-  submit, and a static reveal stepped through by
-  hand (◀/▶, Lichess-analysis style — no timer, no auto-advancing animation; the
-  board still fades in on reveal). The puzzle is never
+  submit, a **give-up** button (reveals the stored solution, scored as a loss), and a
+  static reveal stepped through by hand — ◀/▶ **or** the arrow keys **or** clicking a
+  move in the post-tactic **SAN move list** (Lichess-analysis style — no timer, no
+  auto-advancing animation; the board still fades in on reveal). The puzzle is never
   labelled with its mate depth; puzzles are drawn at random from a pool near the
   user's Elo, which is scored on the first submission and persisted to `localStorage`.
+  Laid out to work on a phone: the two-column layout stacks below 840px, the board
+  takes touch input (pointer events + `touch-action: none`), and controls grow to a
+  ~44px tap target on a coarse pointer.
   Builds to a wasm bundle with `trunk build --release` (the database is ~46 KiB of that).
   **KiB, and stated as such deliberately**: an earlier draft said "687 KB" from a
   byte count read as decimal while `database.rs` said "46 KB" from the same count
@@ -205,7 +210,7 @@ a thread pool, and a file writer, and nothing worth a test.
 no toolchain. Anything that can live in core, must.
 
 The web crate should contain almost no logic worth testing *in its components*. That it has
-57 tests anyway is not a contradiction: they cover `square`, `session`, `rating`, `settings`
+66 tests anyway is not a contradiction: they cover `square`, `session`, `rating`, `settings`
 and `database`, the crate's Leptos-free parts, which is exactly where its logic was pushed so
 a native test could reach it. The rule bites on `board`/`panel`/`line`/`app` — if a test wants
 to reach into one of those, the thing it wants is in the wrong module.
@@ -260,11 +265,17 @@ its only consumer. That is the line; it is not "no strings in core".
   sets, not the absence of a call), `flip` (the transient per-puzzle board flip, cleared
   by `reset` alongside the line — see "Which way the board faces" below),
   `submit` (one `judge` call, returns `Some(Outcome)`
-  only on the first scoring submission so a miss-then-solve cannot re-score), and the
-  manual reveal cursor
-  (`step_back`/`step_forward`/`can_step_back`/`can_step_forward`, plus `step_at` for
-  the replay's off-by-one). `explain` renders a refutation as a sentence. All native,
-  because this is where the logic was pushed so `line`/`app` need none.
+  only on the first scoring submission so a miss-then-solve cannot re-score),
+  `give_up` (clears the drawn line and reveals the puzzle's *stored* solution — built
+  by the sibling `reveal(puzzle)`, beside `solve` so its playback is native-tested —
+  scored as a loss under the same first-event-only rule; see "Give up is a scored
+  concession" below), and the manual reveal cursor
+  (`step_back`/`step_forward`/`step_to`/`can_step_back`/`can_step_forward`, plus
+  `step_at` for the replay's off-by-one). `is_revealed` (solve **or** give-up) is what
+  gates the board reveal and the drawing lock, distinct from `is_solved` (the win
+  message only). `explain` renders a refutation as a sentence, and `movelist(start,
+  steps)` renders the reveal as numbered SAN rows for the analysis panel — both pure.
+  All native, because this is where the logic was pushed so `line`/`app` need none.
 - `rating` — the Elo update (`update(user, puzzle, Outcome)`), and `load`/`save` over
   `localStorage`. The arithmetic is pure and native-tested; only the storage I/O needs
   a browser, and it is the only thing here that touches one.
@@ -280,7 +291,9 @@ its only consumer. That is the line; it is not "no strings in core".
   that can itself fail — are not open-coded twice. The `window().local_storage()` handle is
   private to the module; callers deal only in a key and an `Option<String>`.
 - `database` — the committed JSONL, `include_str!`d.
-- `board`, `panel`, `line`, `app` — components. Markup and event plumbing only.
+- `board`, `panel`, `line`, `app` — components. Markup and event plumbing only. `line`
+  swaps its drawn-arrow list for the SAN `Movelist` once revealed; `app` holds the
+  window `keydown` listener that maps the arrow keys onto the reveal cursor.
 - `pieces` — Cburnett's artwork, taken from lila (GPLv2-or-later, so compatible with our
   GPL-3.0-or-later), compiled in. See `assets/pieces/README.md`.
 - `constants` — interface policy: board side, arrow geometry, Elo constants, selection
@@ -318,9 +331,14 @@ CI. It draws a real solution, submits, steps all the way back to the empty start
 lit, pieces still shown), then one step forward, and asserts the first move re-lights — a
 reveal that did not actually move fails both halves. A third test guards that a last-rank
 non-pawn move is still enterable now that promotion is a per-move control (see "Promotion"
-below), and a fourth that the settings POV and the flip button actually re-orient the board
+below); a fourth that the settings POV and the flip button actually re-orient the board
 and that the POV persists across a reload while the flip does not (see "Which way the board
-faces" below).
+faces" below); a fifth that giving up reveals the solution as a scored loss and the SAN
+move list navigates by both click and arrow key (see "The analysis move list" above); and
+a sixth — in a separate `mobile` Playwright *project* on a phone viewport,
+`e2e/mobile.spec.js` — that a **touch** drag draws an arrow and the layout stacks (see
+"Mobile" above). Shared e2e utilities (`collectErrors`, the board/drag constants) live in
+`e2e/helpers.js` so the two specs cannot drift on what a page error or a drag budget is.
 
 **Two e2e traps this cost real time on, both about the *harness*, not the app.** First,
 the board is an `aspect-ratio: 1` box below the masthead, so at Playwright's default 720px
@@ -418,6 +436,71 @@ the previous puzzle's drag into the next. The reactive re-orientation (does clic
 control actually redraw the board) is a browser-only concern, so it is pinned by
 `reveal.spec.js`'s `the POV setting and flip control re-orient the board`, which also proves
 the persistence split: reload keeps the POV, drops the flip.
+
+### Give up is a scored concession, revealed from the stored solution
+
+A **give-up** button sits with the editing controls (Submit/Undo/Clear), but is
+deliberately *not* disabled on an empty line — being stuck with nothing drawn is
+exactly when it is wanted. Pressing it reveals the puzzle's **own stored solution**
+(there is no winning line of the user's to play out) and scores a loss.
+
+Two decisions the user made, recorded so they are not re-litigated:
+
+- **It counts as a loss** (Lichess "view solution" semantics), but only once:
+  `give_up` returns `Some(Outcome::Failed)` under the *same* first-scoring-event rule
+  `submit` uses, so a user who already missed the puzzle (and was already docked) is
+  not docked again for then giving up — they just see the answer. Pinned by
+  `session.rs`'s `giving_up_after_a_miss_reveals_without_scoring_again`.
+- **The move list uses SAN** (`Qh5#`), not the coordinate arrows the "Your line" panel
+  shows. Post-reveal the mate is on screen, so SAN leaks nothing and reads the way a
+  chess player expects.
+
+The reveal machinery is shared with a solve. `Solve::GaveUp(steps)` carries the same
+plies as `Solve::Solved(steps)`, and **`is_revealed` — not `is_solved` — is what gates
+the board reveal and the drawing lock**, because both states reveal. `is_solved` is
+kept for the one thing specific to *solving*: the "Mate. …" win message and the win
+outcome. Getting this split wrong would either leave the board editable after giving up
+or claim the user solved a puzzle they conceded. `give_up` scoring lives in the **app
+layer** (`session::solve`/`judge` stay pure), the same place `submit` scores, via a
+shared `score` callback so the two cannot compute the rating differently. The reveal's
+plies are built by `session::reveal(puzzle)` — a pure sibling of `solve`, native-tested
+(`reveal_plays_out_the_stored_solution_to_mate`) rather than inlined in the component,
+so the "stored solution mates from the start" invariant lives beside the one `solve`
+relies on. `give_up` also **clears the drawn line**: a solve's arrows *are* the
+solution and stay, but a give-up's arrows are the user's own (often a wrong stab) and
+would otherwise paint over the revealed answer — pinned by `giving_up_clears_the_drawn_line`.
+
+### The analysis move list, and the three ways to step the reveal
+
+Once revealed (solve or give-up), the "Your line" panel swaps to a **Lichess-style move
+list**: `session::movelist(start, steps)` renders every ply as numbered SAN rows, and
+the board can be stepped **three** ways, all driving the one `Attempt::ply` cursor —
+the ◀/▶ buttons (`step_back`/`step_forward`), the **arrow keys** (a window `keydown`
+listener, active only while revealed, `prevent_default` so the page does not scroll),
+and **clicking a move** (`step_to`, clamped). `Ply::at` is the 1-based cursor value a
+row names, so a click maps to `step_to` with no off-by-one at the call site.
+
+`movelist` is pure and native-tested (`the_movelist_names_every_ply_in_order`, and
+`…_opens_on_black_when_black_moves_first` for the numbering when the solver leads as
+Black — a `1...` in Lichess terms). The reactive half — that a click and a keypress
+actually move the board — is a browser-only concern, pinned by `reveal.spec.js`'s
+`giving up reveals the solution, and the move list navigates by click and arrow key`.
+The `movelist` **`Memo` in `app` depends on `solve` and the puzzle, not on `ply`**, so
+it is built once per reveal and not rebuilt on every step; each move cell reads `ply`
+itself for its highlight.
+
+### Mobile: it is built for touch, and a `mobile` Playwright project proves it
+
+The app works on a phone by construction, and this is now *checked* rather than
+asserted. The board takes **pointer events** (which fire for touch) with
+`touch-action: none` (or the browser pans the page instead of delivering the drag), the
+two-column layout **stacks below 840px**, and interactive controls grow to a ~44px tap
+target under `@media (pointer: coarse)`. A second Playwright project, `mobile`, runs
+`e2e/mobile.spec.js` on a 412×915 phone viewport with touch enabled: it asserts the
+layout stacks, `touch-action` is `none`, the board fits above the fold, and a
+**touch-type pointer drag** (dispatched as `pointerType: "touch"`, the input a finger
+produces) draws an arrow. The reveal/step wiring is orientation- and size-independent,
+so it is not re-proved there — only the phone-specific concerns are.
 
 ### Arrows are coloured per move, and duplicates fan apart
 

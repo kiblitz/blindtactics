@@ -11,8 +11,8 @@ use blindfold_core::mate;
 use blindfold_core::roster;
 use leptos::prelude::*;
 
-/// The drawn line, the submit controls, and — once solved — the controls that step
-/// through the reveal.
+/// The drawn line, the submit controls, and — once the board is revealed — the
+/// controls that step through the reveal.
 ///
 /// Reads the line through `drawn` and reports edits through callbacks rather than
 /// mutating a shared vector, so the whole attempt lives behind one
@@ -22,6 +22,14 @@ pub fn Line(
     #[prop(into)] drawn: Signal<Vec<arrow::Arrow>>,
     solver: shakmaty::Color,
     #[prop(into)] solve: Signal<Option<session::Solve>>,
+    /// The reveal as a move list, once the board is revealed — the plies to walk,
+    /// grouped into numbered rows. `None` until the board is revealed.
+    #[prop(into)]
+    movelist: Signal<Option<Vec<session::Row>>>,
+    /// Which ply the reveal is showing, for highlighting the move list's current
+    /// move. Meaningful only once revealed.
+    #[prop(into)]
+    ply: Signal<usize>,
     /// Whether the reveal can step toward the start / toward the mate — for
     /// disabling the two navigation controls at the ends of the line.
     #[prop(into)]
@@ -30,6 +38,7 @@ pub fn Line(
     #[prop(into)] on_undo: Callback<()>,
     #[prop(into)] on_clear: Callback<()>,
     #[prop(into)] on_submit: Callback<()>,
+    #[prop(into)] on_give_up: Callback<()>,
     /// Set (or clear) the promotion piece on the arrow at the given index — driven
     /// by the per-move control shown on a last-rank move.
     #[prop(into)]
@@ -37,41 +46,74 @@ pub fn Line(
     #[prop(into)] on_next: Callback<()>,
     #[prop(into)] on_step_back: Callback<()>,
     #[prop(into)] on_step_forward: Callback<()>,
+    /// Jump the reveal straight to a ply — a move-list entry was clicked.
+    #[prop(into)]
+    on_step_to: Callback<usize>,
 ) -> impl IntoView {
-    let solved =
-        Signal::derive(move || solve.with(|s| matches!(s, Some(session::Solve::Solved(_)))));
+    // Revealed once the board is shown — a solve *or* a give-up. Both replace the
+    // "Your line" editing view with the solution's move list and the stepper. Read
+    // from `solve`, the panel's one source of state, rather than from the presence of
+    // the `movelist` data prop: the two are kept in lockstep by `app`, but the truth
+    // is "the attempt is revealed", not "a list happens to exist".
+    let revealed = Signal::derive(move || {
+        solve.with(|s| s.as_ref().and_then(session::Solve::steps).is_some())
+    });
 
     // The line-editing controls (Submit/Undo/Clear) are inert together when there is
-    // no line to act on. One predicate so the three buttons cannot drift apart.
+    // no line to act on. One predicate so the three buttons cannot drift apart. Give
+    // up is *not* among them: being stuck with nothing drawn is exactly when it is
+    // wanted, so it stays enabled on an empty line.
     let editing_disabled = Signal::derive(move || drawn.get().is_empty());
 
     view! {
         <section class="panel" aria-label="Your line">
-            <h2 class="panel__title">"Your line"</h2>
+            <h2 class="panel__title">
+                {move || if revealed.get() { "Solution" } else { "Your line" }}
+            </h2>
 
-            <ol class="line">
-                {move || {
-                    let line = drawn.get();
-                    if line.is_empty() {
-                        return view! {
-                            <li class="line__empty">"Drag from one square to another."</li>
-                        }
-                            .into_any();
+            {move || {
+                if revealed.get() {
+                    // The solution as a Lichess-style move list, clickable to jump.
+                    let rows = Signal::derive(move || movelist.get().unwrap_or_default());
+                    view! { <Movelist rows=rows current=ply on_step_to=on_step_to /> }.into_any()
+                } else {
+                    view! {
+                        <ol class="line">
+                            {move || {
+                                let line = drawn.get();
+                                if line.is_empty() {
+                                    return view! {
+                                        <li class="line__empty">
+                                            "Drag from one square to another."
+                                        </li>
+                                    }
+                                        .into_any();
+                                }
+                                line.into_iter()
+                                    .enumerate()
+                                    .map(|(i, a)| {
+                                        view! {
+                                            <Step
+                                                index=i
+                                                entry=a
+                                                solver=solver
+                                                on_promote=on_promote
+                                            />
+                                        }
+                                    })
+                                    .collect_view()
+                                    .into_any()
+                            }}
+                        </ol>
                     }
-                    line.into_iter()
-                        .enumerate()
-                        .map(|(i, a)| {
-                            view! { <Step index=i entry=a solver=solver on_promote=on_promote /> }
-                        })
-                        .collect_view()
                         .into_any()
-                }}
-            </ol>
+                }
+            }}
 
             <div class="controls">
                 {move || {
-                    if solved.get() {
-                        // Solved: walk the mating line back and forth, Lichess
+                    if revealed.get() {
+                        // Revealed: walk the mating line back and forth, Lichess
                         // analysis style, or move on.
                         view! {
                             <div class="stepper" role="group" aria-label="Step through the mate">
@@ -123,6 +165,12 @@ pub fn Line(
                             >
                                 "Clear"
                             </button>
+                            <button
+                                class="button button--give-up"
+                                on:click=move |_| on_give_up.run(())
+                            >
+                                "Give up"
+                            </button>
                         }
                             .into_any()
                     }
@@ -131,6 +179,68 @@ pub fn Line(
 
             <Verdict solve=solve solver=solver />
         </section>
+    }
+}
+
+/// The reveal's move list: SAN for every ply, in numbered rows, each clickable to
+/// jump the board to that move. The move the board is currently showing is
+/// highlighted.
+///
+/// Only shown once revealed, so it says nothing the board does not already: by the
+/// time it renders, the mate is on screen. The `<ol>` rebuilds only when `rows`
+/// changes (a new reveal); stepping the cursor changes only which cell is
+/// highlighted, via each cell's own read of `current`.
+#[component]
+fn Movelist(
+    #[prop(into)] rows: Signal<Vec<session::Row>>,
+    #[prop(into)] current: Signal<usize>,
+    #[prop(into)] on_step_to: Callback<usize>,
+) -> impl IntoView {
+    view! {
+        <ol class="movelist" aria-label="Solution moves">
+            {move || {
+                rows.get()
+                    .into_iter()
+                    .map(|row| {
+                        view! {
+                            <li class="movelist__row">
+                                <span class="movelist__number">{row.number} "."</span>
+                                <MoveCell ply=row.white current=current on_step_to=on_step_to />
+                                <MoveCell ply=row.black current=current on_step_to=on_step_to />
+                            </li>
+                        }
+                    })
+                    .collect_view()
+            }}
+        </ol>
+    }
+}
+
+/// One side's move in a [`Movelist`] row: a button that jumps the reveal to it, or an
+/// empty placeholder when that side did not move in this row (a line that opens on
+/// Black, or ends on White).
+#[component]
+fn MoveCell(
+    ply: Option<session::Ply>,
+    #[prop(into)] current: Signal<usize>,
+    #[prop(into)] on_step_to: Callback<usize>,
+) -> impl IntoView {
+    match ply {
+        None => view! { <span class="movelist__cell movelist__cell--empty"></span> }.into_any(),
+        Some(ply) => {
+            let at = ply.at;
+            view! {
+                <button
+                    class="movelist__cell movelist__ply mono"
+                    class:movelist__ply--on=move || current.get() == at
+                    aria-current=move || (current.get() == at).then_some("true")
+                    on:click=move |_| on_step_to.run(at)
+                >
+                    {ply.san}
+                </button>
+            }
+            .into_any()
+        }
     }
 }
 
@@ -237,6 +347,17 @@ fn Verdict(
                         view! {
                             <span class="verdict--ok">
                                 "Mate. Here is the position you were holding."
+                            </span>
+                        }
+                            .into_any()
+                    }
+                    // Gave up: the solution is revealed and was scored as a loss (the
+                    // delta badge shows it), so this is phrased as the concession it
+                    // is — informational, not a "wrong answer" the user can act on.
+                    Some(session::Solve::GaveUp(_)) => {
+                        view! {
+                            <span class="verdict--no">
+                                "You gave up — here is the forced mate. Step through it below."
                             </span>
                         }
                             .into_any()

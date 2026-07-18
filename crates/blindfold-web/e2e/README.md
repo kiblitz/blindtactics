@@ -13,8 +13,9 @@ but the same class of bug lives in the step wiring, which is what this spec driv
 
 ## What it checks
 
-`reveal.spec.js` holds four tests (the **Solve, step, and rate** one runs on two
-pinned puzzles):
+Two specs, run as two Playwright projects: `reveal.spec.js` on a desktop viewport,
+and `mobile.spec.js` on a phone viewport with touch. `reveal.spec.js` holds five tests
+(the **Solve, step, and rate** one runs on two pinned puzzles):
 
 - **Blind board.** Loads the app and confirms the board is a void with real piece
   artwork in the roster (no pieces on the board, no `board--revealed`).
@@ -48,9 +49,21 @@ pinned puzzles):
   in the corner, POV=Black mirrors to h1, and flip inverts the current view. White/Black
   are puzzle-independent, so nothing is pinned. A reload then proves the design's split —
   the POV persisted to `localStorage`, the transient flip did not.
+- **Give up and navigate the analysis.** On a pinned mate-in-4, presses **Give up** with
+  nothing drawn and asserts the board reveals, the verdict names the concession, and the
+  rating *drops* (giving up is a scored loss). Then it exercises the post-tactic SAN move
+  list: clicking the first move jumps the board (the move highlights, its square lights),
+  and the **arrow keys** step the reveal (left to the empty start, right re-lights the
+  first move) — all reactive concerns a native test cannot see.
+
+`mobile.spec.js` (the `mobile` project) asserts the phone-specific behaviour: the
+two-column layout **stacks** (panels below the board), `touch-action` is `none`, the
+whole board fits above the fold, and a **touch-type pointer drag** draws an arrow. The
+reveal/step wiring is size-independent and not re-proved there.
 
 The solutions come from all four committed `database/mate_in_*.jsonl` files, read
-off disk, so the test cannot drift from what the app was built with.
+off disk, so the test cannot drift from what the app was built with. Shared helpers
+(`collectErrors`, board/drag constants) live in `e2e/helpers.js`.
 
 The Playwright viewport is sized (in `playwright.config.js`) to fit the whole board:
 a drag endpoint below the fold registers on no square, which would fail

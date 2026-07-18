@@ -63,7 +63,7 @@ fn square_of(
     square::of_fraction(x, y, orientation)
 }
 
-/// The blank board, the arrows drawn on it, and — once solved — the pieces.
+/// The blank board, the arrows drawn on it, and — once revealed — the pieces.
 ///
 /// `revealed` is the position to show, `None` while the user is still blind. It
 /// is a position rather than a bool because the reveal steps through a line: each
@@ -85,7 +85,8 @@ pub fn Board(
     /// The square a move just landed on, lit so the eye can follow the replay.
     #[prop(into)]
     highlight: Signal<Option<shakmaty::Square>>,
-    /// Whether the user may still draw. False once they have solved it.
+    /// Whether the user may still draw. False once the board is revealed — a solve or
+    /// a give-up, both of which lock the board.
     #[prop(into)]
     locked: Signal<bool>,
 ) -> impl IntoView {

@@ -38,7 +38,23 @@ module.exports = defineConfig({
   projects: [
     {
       name: "chromium",
+      testMatch: /reveal\.spec\.js/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 1280 } },
+    },
+    // A phone: a narrow viewport with touch, so the mobile spec exercises the
+    // responsive layout and real touch-type pointer input. Explicit chromium options
+    // rather than a device descriptor, so the emulation (mobile viewport meta +
+    // touch) is stated here and does not drift with a Playwright device-list bump.
+    // Tall enough that the whole board still fits above the fold at this width.
+    {
+      name: "mobile",
+      testMatch: /mobile\.spec\.js/,
+      use: {
+        browserName: "chromium",
+        viewport: { width: 412, height: 915 },
+        isMobile: true,
+        hasTouch: true,
+      },
     },
   ],
   // Build the release bundle, then serve it statically. The first CI run has a

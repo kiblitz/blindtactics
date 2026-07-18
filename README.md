@@ -61,9 +61,10 @@ cargo fmt --all -- --check
 To run the web app: `trunk serve` in `crates/blindfold-web` (`trunk build --release` for
 `dist/`).
 
-There is also one browser test — `crates/blindfold-web/e2e/reveal.spec.js` — for the class
-of bug native tests cannot see (reactive wiring; it caught a replay that froze after one
-ply). From `crates/blindfold-web`: `npm install`, `npx playwright install chromium`, then
+There are also browser tests — `crates/blindfold-web/e2e/`, run as two Playwright projects
+(`reveal.spec.js` on a desktop viewport, `mobile.spec.js` on a phone with touch) — for the
+class of bug native tests cannot see (reactive wiring; they caught a replay that froze after
+one ply). From `crates/blindfold-web`: `npm install`, `npx playwright install chromium`, then
 `npm test`.
 
 ## Continuous integration

@@ -510,3 +510,189 @@ fn stepping_an_unsolved_attempt_does_nothing() {
 fn an_empty_database_is_a_broken_build() {
     session::Session::new(Vec::<puzzle::Puzzle>::new());
 }
+
+// --- give up -----------------------------------------------------------------
+
+/// Giving up reveals the stored solution and scores a loss — once. It reveals the
+/// board like a solve (so the line can be stepped through) but is not a solve, and a
+/// second give-up neither re-scores nor disturbs the reveal.
+#[test]
+fn giving_up_reveals_the_solution_and_scores_a_loss_once() {
+    let mut a = session::Attempt::new();
+    let steps = solved_steps();
+    let n = steps.len();
+    assert_eq!(
+        a.give_up(steps),
+        Some(rating::Outcome::Failed),
+        "giving up counts as a loss"
+    );
+    assert!(a.is_revealed(), "and reveals the board");
+    assert!(
+        !a.is_solved(),
+        "but is not a solve — the user did not find it"
+    );
+    assert_eq!(a.ply(), n, "the reveal opens on the mate, like a solve");
+    assert_eq!(
+        a.give_up(solved_steps()),
+        None,
+        "giving up again neither re-scores nor changes the reveal"
+    );
+}
+
+/// A user who already missed the puzzle (and was scored for it) is not docked a
+/// second time for then giving up — but the solution is still revealed.
+#[test]
+fn giving_up_after_a_miss_reveals_without_scoring_again() {
+    let mut a = session::Attempt::new();
+    let miss = session::Solve::Refuted {
+        defense: vec![],
+        reason: mate::Reason::NoMate,
+    };
+    assert_eq!(a.submit(miss), Some(rating::Outcome::Failed));
+    assert_eq!(
+        a.give_up(solved_steps()),
+        None,
+        "the miss already counted; giving up does not dock twice"
+    );
+    assert!(a.is_revealed(), "but the solution is still revealed");
+}
+
+/// You cannot give up a puzzle you have already solved: it is a no-op, and the
+/// attempt stays a solve rather than being overwritten as a concession.
+#[test]
+fn giving_up_after_a_solve_does_nothing() {
+    let mut a = session::Attempt::new();
+    a.submit(session::Solve::Solved(solved_steps()));
+    assert!(a.is_solved());
+    assert_eq!(a.give_up(solved_steps()), None);
+    assert!(a.is_solved(), "still a solve, not a give-up");
+}
+
+/// Giving up clears whatever line the user had drawn. On a solve the arrows are the
+/// solution and stay on the board, but a give-up's arrows are the user's own (often a
+/// wrong stab) and must not be left painted over the revealed answer.
+#[test]
+fn giving_up_clears_the_drawn_line() {
+    let mut a = session::Attempt::new();
+    a.draw(arrow(shakmaty::Square::E2, shakmaty::Square::E4));
+    a.draw(arrow(shakmaty::Square::D2, shakmaty::Square::D4));
+    assert_eq!(a.arrows().len(), 2, "the user drew a wrong line first");
+    a.give_up(solved_steps());
+    assert!(
+        a.arrows().is_empty(),
+        "the drawn line is cleared so it cannot overlay the reveal"
+    );
+}
+
+/// `reveal` plays out a puzzle's own stored solution to the mate — the plies a give-up
+/// walks. A mate in N is `2N-1` plies and ends in checkmate.
+#[test]
+fn reveal_plays_out_the_stored_solution_to_mate() {
+    for depth in 1..=4 {
+        let steps = session::reveal(&puzzle_of_depth(depth));
+        assert_eq!(
+            steps.len(),
+            2 * depth - 1,
+            "a mate in {depth} is 2N-1 plies"
+        );
+        assert!(
+            shakmaty::Position::is_checkmate(&steps.last().expect("non-empty").after),
+            "the last ply delivers mate",
+        );
+    }
+}
+
+// --- step_to -----------------------------------------------------------------
+
+/// `step_to` jumps the reveal straight to a named ply and clamps a past-the-end
+/// index to the mate, so a move-list click can never land out of range.
+#[test]
+fn step_to_jumps_within_the_reveal_and_clamps() {
+    let mut a = session::Attempt::new();
+    let n = solved_steps().len();
+    a.submit(session::Solve::Solved(solved_steps()));
+    a.step_to(1);
+    assert_eq!(a.ply(), 1);
+    a.step_to(0);
+    assert_eq!(a.ply(), 0);
+    a.step_to(n + 5);
+    assert_eq!(a.ply(), n, "a past-the-end index clamps to the mate");
+}
+
+#[test]
+fn step_to_is_inert_on_an_unrevealed_attempt() {
+    let mut a = session::Attempt::new();
+    a.step_to(3);
+    assert_eq!(a.ply(), 0);
+}
+
+// --- movelist ----------------------------------------------------------------
+
+/// The (start, plies) of a puzzle's own solved line — the reveal a solve or give-up
+/// walks, and what the move list is built from. Built through [`session::reveal`], the
+/// same call the give-up path uses.
+fn reveal_of(p: &puzzle::Puzzle) -> (shakmaty::Chess, Vec<mate::Step>) {
+    let pos = p.position().expect("the database is verified");
+    (pos, session::reveal(p))
+}
+
+/// All the plies in the list, in board order.
+fn plies(rows: &[session::Row]) -> Vec<&session::Ply> {
+    rows.iter()
+        .flat_map(|r| [r.white.as_ref(), r.black.as_ref()])
+        .flatten()
+        .collect()
+}
+
+/// The move list names every ply once, in order, with cursor indices that run
+/// `1..=len` (so a click maps straight to [`Attempt::step_to`]) and the mate written
+/// as SAN ending in `#`.
+#[test]
+fn the_movelist_names_every_ply_in_order() {
+    let (pos, steps) = reveal_of(&puzzle_of_depth(3));
+    let rows = session::movelist(&pos, &steps);
+    let plies = plies(&rows);
+
+    assert_eq!(plies.len(), steps.len(), "every ply appears exactly once");
+    for (i, ply) in plies.iter().enumerate() {
+        assert_eq!(ply.at, i + 1, "cursor indices run 1..=len in board order");
+        assert!(!ply.san.is_empty(), "every ply has a SAN");
+    }
+    assert!(
+        plies
+            .last()
+            .expect("a mate has at least one ply")
+            .san
+            .ends_with('#'),
+        "the final ply is the mate, written in SAN"
+    );
+}
+
+/// A line the solver plays as Black opens with an empty White cell, so the move
+/// numbering stays honest (a `1...` in Lichess terms) rather than mislabelling
+/// Black's move as White's.
+#[test]
+fn the_movelist_opens_on_black_when_black_moves_first() {
+    let p = database()
+        .into_iter()
+        .find(|p| p.solver().expect("the database is verified") == shakmaty::Color::Black)
+        .expect("the database holds a puzzle the solver plays as Black");
+    let (pos, steps) = reveal_of(&p);
+    let rows = session::movelist(&pos, &steps);
+
+    let first = &rows[0];
+    assert!(
+        first.white.is_none(),
+        "a line the solver opens as Black has no White ply in its first row"
+    );
+    assert_eq!(
+        first.black.as_ref().map(|ply| ply.at),
+        Some(1),
+        "the solver's first move is Black's, at cursor 1"
+    );
+    assert_eq!(
+        first.number,
+        shakmaty::Position::fullmoves(&pos).get(),
+        "the row keeps the position's own move number"
+    );
+}

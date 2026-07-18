@@ -32,6 +32,10 @@
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
+  /* Comfortable touch target on a coarse pointer (~44px). One value so the
+   * min-height and the square icon buttons in the coarse-pointer block agree. */
+  --tap-target: 2.75rem;
+
   /* The revealed board. Not themed — see the note above. */
   --square-light: #d7c9ad;
   --square-dark: #8f7a5c;
@@ -603,10 +607,75 @@ body {
   height: 100%;
 }
 
+/* ---- the solution move list (post-reveal analysis) --------------------- */
+
+/* Shown in place of "Your line" once the board is revealed: the mate's plies in
+ * SAN, numbered by move, each clickable to jump the board. Scrolls within itself so
+ * a long line never pushes the controls off-screen. */
+.movelist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin: 0;
+  padding: 0;
+  max-height: 11rem;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.movelist__row {
+  display: grid;
+  grid-template-columns: 1.8rem 1fr 1fr;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.movelist__number {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--chalk-faint);
+  text-align: right;
+}
+
+.movelist__cell {
+  min-width: 0;
+  padding: 0.28rem 0.4rem;
+  font-size: 0.84rem;
+  text-align: left;
+}
+
+/* A side that did not move in this row (a line opening on Black, or ending on
+ * White) leaves an empty cell so the two columns stay aligned. */
+.movelist__cell--empty {
+  visibility: hidden;
+}
+
+.movelist__ply {
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--chalk);
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.movelist__ply:hover {
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+}
+
+/* The move the board is currently showing. */
+.movelist__ply--on {
+  border-color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 22%, transparent);
+  color: var(--amber);
+}
+
 /* ---- controls ---------------------------------------------------------- */
 
 .controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.45rem;
   margin-top: 0.9rem;
 }
@@ -675,6 +744,19 @@ body {
 .button--on {
   border-color: var(--amber);
   color: var(--amber);
+}
+
+/* "Give up" concedes the puzzle: pushed to the right end, away from the editing
+ * buttons, and toned down so it never competes with Submit. Rose on hover — the
+ * same muted red the refutation verdict uses — because it costs the puzzle. */
+.button--give-up {
+  margin-left: auto;
+  color: var(--chalk-dim);
+}
+
+.button--give-up:hover:not(:disabled) {
+  border-color: var(--rose);
+  color: var(--rose);
 }
 
 :focus-visible {
@@ -797,5 +879,22 @@ body {
   *::after {
     transition: none !important;
     animation-duration: 0.01ms !important;
+  }
+}
+
+/* On a touch device the controls were laid out for a mouse, so the small glyph and
+ * piece buttons are fiddly to tap. Enlarge every interactive control to a
+ * comfortable target (~44px) where the pointer is coarse. */
+@media (pointer: coarse) {
+  .button,
+  .button--step,
+  .movelist__ply {
+    min-height: var(--tap-target);
+  }
+
+  .button--icon,
+  .line__promote-choice {
+    width: var(--tap-target);
+    height: var(--tap-target);
   }
 }

@@ -108,6 +108,13 @@ pub fn choose_near(
 pub enum Solve {
     /// The line mates against every defense. Carries the reveal.
     Solved(Vec<mate::Step>),
+    /// The user gave up and asked to see the answer. Carries the same reveal as
+    /// [`Solved`](Solve::Solved) — the plies to step through — but built from the
+    /// puzzle's *stored* solution rather than the user's line, since there is no
+    /// winning line of theirs to play out. A concession, scored as a loss (see
+    /// [`Attempt::give_up`]); distinct from `Solved` so the board is revealed and
+    /// walkable without claiming the user found the mate.
+    GaveUp(Vec<mate::Step>),
     /// The line mates, but before its last arrow — so some arrows the user drew
     /// are never played against any defense. Treated as a miss, not a solve: the
     /// user committed to moves past the mate, which is a wrong line even though a
@@ -137,6 +144,19 @@ pub enum Solve {
     Unjudged(mate::Limit),
 }
 
+impl Solve {
+    /// The plies the reveal steps through, for the two states that reveal the board
+    /// ([`Solved`](Solve::Solved) and [`GaveUp`](Solve::GaveUp)); `None` for a verdict
+    /// that keeps the board hidden. One accessor so "is this revealed, and what does it
+    /// walk?" is a single question, not two matches that could disagree.
+    pub fn steps(&self) -> Option<&[mate::Step]> {
+        match self {
+            Solve::Solved(steps) | Solve::GaveUp(steps) => Some(steps),
+            _ => None,
+        }
+    }
+}
+
 /// What to show at `ply` of a replay: the step just played, or `None` at the
 /// start, before any of it has run.
 ///
@@ -149,6 +169,78 @@ pub enum Solve {
 /// start" beats an index panic that takes the page down.
 pub fn step_at(steps: &[mate::Step], ply: usize) -> Option<&mate::Step> {
     ply.checked_sub(1).and_then(|i| steps.get(i))
+}
+
+/// One ply in the reveal's move list: its SAN and the reveal cursor it corresponds
+/// to.
+///
+/// `at` is the 1-based cursor value — the same index [`Attempt::ply`] holds and
+/// [`Attempt::step_to`] takes — so a click on this ply jumps the board straight to
+/// the position after it, with no off-by-one at the call site.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Ply {
+    pub at: usize,
+    pub san: String,
+}
+
+/// One full move of the reveal — a move number and the ply for each side. Either
+/// side can be absent: a line can begin on Black's move (so `white` is `None` in the
+/// first row) or end on White's (so `black` is `None` in the last).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Row {
+    pub number: u32,
+    pub white: Option<Ply>,
+    pub black: Option<Ply>,
+}
+
+/// The reveal as a Lichess-style move list: SAN for every ply, grouped into
+/// numbered rows by side.
+///
+/// Only meaningful once the board is revealed, so this leaks nothing about depth —
+/// by the time it renders, the mate is already on screen. SAN (`Qh5#`, `exd5`)
+/// rather than the coordinate arrows the "Your line" panel shows: this is analysis a
+/// chess player reads, and the position it is read against is visible.
+///
+/// A pure function of the start position and the plies, here rather than in the
+/// component so a native test pins the numbering — which side leads, and how the
+/// fullmove count advances — the same reason the rest of the reveal's arithmetic
+/// lives in `session` rather than in markup.
+pub fn movelist(start: &shakmaty::Chess, steps: &[mate::Step]) -> Vec<Row> {
+    let mut rows: Vec<Row> = Vec::new();
+    for (i, step) in steps.iter().enumerate() {
+        // The position the ply was played from: the start for the first ply, the
+        // previous ply's result thereafter. Its turn and fullmove number are what
+        // place this ply in the list.
+        let before = if i == 0 {
+            start.clone()
+        } else {
+            steps[i - 1].after.clone()
+        };
+        let number = before.fullmoves().get();
+        let white_to_move = before.turn() == shakmaty::Color::White;
+        let san = shakmaty::san::SanPlus::from_move(before, step.played).to_string();
+        let ply = Ply { at: i + 1, san };
+
+        // White always opens a fresh row. Black attaches to the current row when it
+        // is White's move that is missing its reply; otherwise (a line that opens on
+        // Black) it starts its own row so the number still reads correctly.
+        match rows.last_mut() {
+            Some(last) if !white_to_move && last.number == number && last.black.is_none() => {
+                last.black = Some(ply);
+            }
+            _ if white_to_move => rows.push(Row {
+                number,
+                white: Some(ply),
+                black: None,
+            }),
+            _ => rows.push(Row {
+                number,
+                white: None,
+                black: Some(ply),
+            }),
+        }
+    }
+    rows
 }
 
 /// Judge `line` against `puzzle`, and on a solve, work out what to reveal.
@@ -179,6 +271,17 @@ pub fn solve(puzzle: &puzzle::Puzzle, line: &[arrow::Arrow]) -> Solve {
         mate::Verdict::Refuted { defense, reason } => Solve::Refuted { defense, reason },
         mate::Verdict::TooComplex { reason } => Solve::Unjudged(reason),
     }
+}
+
+/// The playback of a puzzle's own stored solution — the plies a give-up reveals.
+///
+/// Give-up has no line of the user's to play out, so it reveals the puzzle's stored
+/// answer instead. Extracted here, beside [`solve`], so the "the stored solution
+/// mates from the start position" invariant is native-tested rather than encoded
+/// inline in the component — the same rule that keeps [`solve`]'s own playback here.
+pub fn reveal(puzzle: &puzzle::Puzzle) -> Vec<mate::Step> {
+    let position = puzzle.position().expect("the database is verified");
+    mate::playback(&position, &puzzle.solution).expect("the stored solution mates")
 }
 
 /// Whether an illegal arrow looks like a pawn promotion left with no piece chosen —
@@ -262,7 +365,7 @@ pub struct Attempt {
     /// Whether the board is flipped from the point-of-view preference for *this*
     /// puzzle. A transient view toggle, so it lives here (reset per puzzle by
     /// [`reset`](Attempt::reset)) rather than in the persisted [`crate::settings`],
-    /// and is deliberately not locked once solved: flipping to view the mate from
+    /// and is deliberately not locked once revealed: flipping to view the mate from
     /// the other side is useful precisely after the reveal.
     flipped: bool,
 }
@@ -291,45 +394,58 @@ impl Attempt {
     }
 
     /// Flip the board for this puzzle, or flip it back. Unlike the drawing edits
-    /// this is *not* locked once solved — flipping to read the revealed mate from
+    /// this is *not* locked once revealed — flipping to read the revealed mate from
     /// the other side is a legitimate thing to do after the board appears.
     pub fn flip(&mut self) {
         self.flipped = !self.flipped;
     }
 
-    /// The line has been solved: the board is revealed and drawing is locked.
+    /// The line has been solved: the user found the mate. Distinct from
+    /// [`is_revealed`](Attempt::is_revealed) — giving up also reveals the board, but is
+    /// not a solve. It is the predicate form of "the user found the mate": the win
+    /// message keys on that distinction (the [`Verdict`](crate::line) component reaches
+    /// it by matching the [`Solve::Solved`] variant directly, since it must tell the
+    /// reveal states apart anyway), while the board reveal and the drawing lock — which
+    /// a give-up shares — gate on `is_revealed`.
     pub fn is_solved(&self) -> bool {
         matches!(self.solve, Some(Solve::Solved(_)))
     }
 
-    /// The replay's plies, or `None` when the attempt is not a solve.
-    pub fn steps(&self) -> Option<&[mate::Step]> {
-        match &self.solve {
-            Some(Solve::Solved(steps)) => Some(steps),
-            _ => None,
-        }
+    /// The board is revealed and drawing is locked — the user either solved it or gave
+    /// up. Both show the pieces and the stepped-through line, and both must stop
+    /// further drawing, so the reveal-and-lock behaviour keys on this rather than on
+    /// [`is_solved`](Attempt::is_solved).
+    pub fn is_revealed(&self) -> bool {
+        self.steps().is_some()
     }
 
-    /// Append one arrow to the line. Ignored once solved: the board is locked, and
-    /// a stray draw must not extend a line that has already been judged.
+    /// The replay's plies, or `None` when the board is not revealed. Present for both
+    /// a solve and a give-up (see [`Solve::steps`]).
+    pub fn steps(&self) -> Option<&[mate::Step]> {
+        self.solve.as_ref().and_then(Solve::steps)
+    }
+
+    /// Append one arrow to the line. Ignored once the board is revealed: it is
+    /// locked, and a stray draw must not extend a line that has already been judged
+    /// (or a puzzle that has been given up on).
     pub fn draw(&mut self, arrow: arrow::Arrow) {
-        if self.is_solved() {
+        if self.is_revealed() {
             return;
         }
         self.arrows.push(arrow);
     }
 
-    /// Drop the last arrow. Ignored once solved, for the same reason as [`draw`].
+    /// Drop the last arrow. Ignored once revealed, for the same reason as [`draw`].
     pub fn undo(&mut self) {
-        if self.is_solved() {
+        if self.is_revealed() {
             return;
         }
         self.arrows.pop();
     }
 
-    /// Drop every arrow. Ignored once solved.
+    /// Drop every arrow. Ignored once revealed.
     pub fn clear(&mut self) {
-        if self.is_solved() {
+        if self.is_revealed() {
             return;
         }
         self.arrows.clear();
@@ -340,7 +456,7 @@ impl Attempt {
     /// cancel: the line's per-move promotion control defaults to "no promotion" and
     /// can be set back to it, so the move stays a plain move.
     pub fn set_promotion(&mut self, index: usize, role: Option<shakmaty::Role>) {
-        if self.is_solved() {
+        if self.is_revealed() {
             return;
         }
         if let Some(a) = self.arrows.get_mut(index) {
@@ -363,8 +479,10 @@ impl Attempt {
             Solve::Overshot { .. } | Solve::Refuted { .. } => Some(rating::Outcome::Failed),
             // An unfinished promotion is a fixable entry, not a wrong answer, and an
             // `Unjudged` is not the user's fault — neither scores, and neither latches
-            // `scored`, so the corrected line can still rate.
-            Solve::Incomplete(_) | Solve::Unjudged(_) => None,
+            // `scored`, so the corrected line can still rate. `GaveUp` never reaches
+            // `submit` (it is produced only by [`give_up`](Attempt::give_up), which
+            // scores it there); the arm is for exhaustiveness.
+            Solve::Incomplete(_) | Solve::Unjudged(_) | Solve::GaveUp(_) => None,
         };
         self.ply = match &verdict {
             Solve::Solved(steps) => steps.len(),
@@ -378,6 +496,34 @@ impl Attempt {
                 Some(o)
             }
             _ => None,
+        }
+    }
+
+    /// Concede the puzzle and reveal its stored solution, landing the cursor on the
+    /// mate so it can be stepped back through. `steps` is the playback of the
+    /// puzzle's own solution (the caller builds it — [`Attempt`] has no puzzle).
+    ///
+    /// Returns [`rating::Outcome::Failed`] to apply, but only for the *first* scoring
+    /// event on this puzzle: giving up counts as a loss like a wrong submission, yet a
+    /// user who already missed it (and was already scored) is not docked twice, so a
+    /// later give-up just reveals. A no-op once the board is already revealed — you
+    /// cannot give up on a puzzle you have solved or already conceded.
+    ///
+    /// Clears the drawn line: on a solve the arrows *are* the solution and stay on the
+    /// board, but a give-up's arrows are whatever the user drew (often a wrong stab, or
+    /// nothing), and leaving them would paint stray arrows over the revealed answer.
+    pub fn give_up(&mut self, steps: Vec<mate::Step>) -> Option<rating::Outcome> {
+        if self.is_revealed() {
+            return None;
+        }
+        self.arrows.clear();
+        self.ply = steps.len();
+        self.solve = Some(Solve::GaveUp(steps));
+        if self.scored {
+            None
+        } else {
+            self.scored = true;
+            Some(rating::Outcome::Failed)
         }
     }
 
@@ -407,6 +553,17 @@ impl Attempt {
                 self.ply += 1;
             }
         }
+    }
+
+    /// Jump the reveal straight to `ply` — the cursor a move list entry names (see
+    /// [`Ply::at`]). Clamped to the reveal's length, and a no-op when the board is not
+    /// revealed, so an out-of-range or stale index degrades to a sensible position
+    /// rather than panicking.
+    pub fn step_to(&mut self, ply: usize) {
+        let Some(len) = self.steps().map(<[mate::Step]>::len) else {
+            return;
+        };
+        self.ply = ply.min(len);
     }
 
     /// Whether stepping back would move the reveal — for disabling the control.

@@ -54,7 +54,20 @@ pub fn App() -> impl IntoView {
     // pieces layer redraws only when the position it shows actually changes.
     let drawn = Memo::new(move |_| attempt.with(|a| a.arrows().to_vec()));
     let solve = Memo::new(move |_| attempt.with(|a| a.solve().cloned()));
-    let solved = Memo::new(move |_| attempt.with(session::Attempt::is_solved));
+    // Revealed (solve or give-up) locks the board and swaps the panel to the
+    // solution. `ply` is the reveal cursor the move list highlights.
+    let locked = Memo::new(move |_| attempt.with(session::Attempt::is_revealed));
+    let ply = Memo::new(move |_| attempt.with(session::Attempt::ply));
+    // The reveal as a move list. Depends on `solve` and the puzzle, not on `ply`, so
+    // it is built once per reveal and not rebuilt on every step. `None` until the
+    // board is revealed.
+    let movelist = Memo::new(move |_| {
+        solve.with(|s| {
+            s.as_ref()
+                .and_then(session::Solve::steps)
+                .map(|steps| position.with(|p| session::movelist(p, steps)))
+        })
+    });
     let can_back = Memo::new(move |_| attempt.with(session::Attempt::can_step_back));
     let can_forward = Memo::new(move |_| attempt.with(session::Attempt::can_step_forward));
     // A `Memo` so the board rebuilds when the flip toggles but *not* on every arrow
@@ -70,24 +83,42 @@ pub fn App() -> impl IntoView {
         elo_delta.set(None);
     };
 
+    // Apply a scoring outcome to the rating — shared by submit and give-up, since
+    // both move the rating exactly the same way and `Attempt` already decides *whether*
+    // a given event scores (returning `Some` only for the first one on the puzzle). A
+    // `Callback` so both closures can hold it. `None` is the common no-score case.
+    let score = Callback::new(move |outcome: Option<rating::Outcome>| {
+        let Some(outcome) = outcome else {
+            return;
+        };
+        let before = elo.get_untracked();
+        let puzzle_rating = puzzle.with_untracked(|p| p.rating);
+        let after = rating::update(before, puzzle_rating, outcome);
+        elo.set(after);
+        // No badge when the rating did not move — reachable only at the floor or
+        // ceiling, where a win/loss clamps back to where it was, and a "+0" up-badge
+        // there would read as a gain that did not happen. Both are <= ELO_CEILING
+        // (3000), so the i32 cast is exact.
+        elo_delta.set((after != before).then(|| after as i32 - before as i32));
+        rating::save(after);
+    });
+
     let submit = move |_| {
         let line = attempt.with_untracked(|a| a.arrows().to_vec());
         let verdict = puzzle.with_untracked(|p| session::solve(p, &line));
-        let puzzle_rating = puzzle.with_untracked(|p| p.rating);
         // `submit` returns the outcome only for the first scoring submission on the
         // puzzle, so a miss-then-solve or a re-solve does not move the rating twice.
         let outcome = attempt.try_update(|a| a.submit(verdict)).flatten();
-        if let Some(outcome) = outcome {
-            let before = elo.get_untracked();
-            let after = rating::update(before, puzzle_rating, outcome);
-            elo.set(after);
-            // No badge when the rating did not move — reachable only at the floor or
-            // ceiling, where a win/loss clamps back to where it was, and a "+0" up-badge
-            // there would read as a gain that did not happen. Both are <= ELO_CEILING
-            // (3000), so the i32 cast is exact.
-            elo_delta.set((after != before).then(|| after as i32 - before as i32));
-            rating::save(after);
-        }
+        score.run(outcome);
+    };
+
+    // Give up: reveal the puzzle's *own* stored solution (there is no winning line of
+    // the user's to play out) and score it as a loss, once. `give_up` returns the
+    // outcome under the same first-event-only rule `submit` uses.
+    let give_up = move |()| {
+        let steps = puzzle.with_untracked(session::reveal);
+        let outcome = attempt.try_update(|a| a.give_up(steps)).flatten();
+        score.run(outcome);
     };
 
     let draw = move |arrow: arrow::Arrow| attempt.update(|a| a.draw(arrow));
@@ -111,6 +142,29 @@ pub fn App() -> impl IntoView {
     };
     let step_back = move |()| attempt.update(session::Attempt::step_back);
     let step_forward = move |()| attempt.update(session::Attempt::step_forward);
+    let step_to = move |ply: usize| attempt.update(|a| a.step_to(ply));
+
+    // Arrow keys walk the reveal, like a Lichess analysis board — only while revealed,
+    // so they never fight anything during solving. `prevent_default` stops the page
+    // scrolling out from under the board on the same key. The listener is on the
+    // window (there is nothing focusable to hang it on) and removed on cleanup.
+    let keydown = window_event_listener(leptos::ev::keydown, move |ev| {
+        if !attempt.with_untracked(session::Attempt::is_revealed) {
+            return;
+        }
+        match ev.key().as_str() {
+            "ArrowLeft" => {
+                ev.prevent_default();
+                attempt.update(session::Attempt::step_back);
+            }
+            "ArrowRight" => {
+                ev.prevent_default();
+                attempt.update(session::Attempt::step_forward);
+            }
+            _ => {}
+        }
+    });
+    on_cleanup(move || keydown.remove());
 
     // The position the board draws: `None` while the user is still blind, then the
     // start position, then each ply the reveal has been stepped to. Stepped by hand
@@ -138,8 +192,6 @@ pub fn App() -> impl IntoView {
                 .map(|drag| drag.to)
         })
     });
-
-    let locked = solved;
 
     view! {
         <main class="app">
@@ -201,15 +253,19 @@ pub fn App() -> impl IntoView {
                                 drawn=drawn
                                 solver=solver.get()
                                 solve=solve
+                                movelist=movelist
+                                ply=ply
                                 can_back=can_back
                                 can_forward=can_forward
                                 on_undo=Callback::new(undo)
                                 on_clear=Callback::new(clear)
                                 on_submit=Callback::new(submit)
+                                on_give_up=Callback::new(give_up)
                                 on_promote=Callback::new(promote)
                                 on_next=Callback::new(next)
                                 on_step_back=Callback::new(step_back)
                                 on_step_forward=Callback::new(step_forward)
+                                on_step_to=Callback::new(step_to)
                             />
                         }
                     }}

@@ -2,17 +2,7 @@
 const { test, expect } = require("@playwright/test");
 const fs = require("node:fs");
 const path = require("node:path");
-
-// Files and ranks per side — the divisor turning a square index into a board
-// fraction. Matches `crate::constants::BOARD_SIDE`.
-const BOARD_SIDE = 8;
-
-// How hard a single drag is retried before giving up, and how long each attempt
-// waits for the line to gain its arrow. The timeout is generous on purpose: a drag
-// that has registered but not yet re-rendered must not be mistaken for a dropped
-// one, because a spurious retry would draw the arrow a second time.
-const DRAG_RETRIES = 4;
-const DRAG_TIMEOUT_MS = 2500;
+const { BOARD_SIDE, DRAG_RETRIES, DRAG_TIMEOUT_MS, collectErrors } = require("./helpers");
 
 // Pin the app's random puzzle choice so the reveal is reproducible. The app picks
 // the next puzzle with `Math::random()`; overriding it to a constant (and clearing
@@ -140,23 +130,6 @@ async function drawArrow(page, board, uci) {
     const name = { q: "queen", r: "rook", b: "bishop", n: "knight" }[suffix];
     await steps.nth(before).locator(".line__promote").getByRole("button", { name }).click();
   }
-}
-
-function collectErrors(page) {
-  const errors = [];
-  page.on("pageerror", (e) => errors.push(String(e)));
-  page.on("console", (m) => {
-    if (m.type() !== "error") return;
-    const text = m.text();
-    // Trunk's autoreload snippet opens a dev-server websocket. A fresh
-    // `trunk build --release` does not inject it (CI rebuilds, so never sees it),
-    // but a locally reused `trunk serve` dist does, and our static server has no
-    // such endpoint. That failure is a serving artifact, never app code — the app
-    // opens no websocket — so it must not fail the run.
-    if (text.includes("trunk/ws") || text.includes("__trunk_address__")) return;
-    errors.push(text);
-  });
-  return errors;
 }
 
 // The puzzle on screen, read from its own `.facts` line — never assume an ordering.
@@ -355,6 +328,63 @@ test("the POV setting and flip control re-orient the board", async ({ page }) =>
   await page.reload();
   await expect(page.locator(".board")).toBeVisible();
   await expect.poll(topLeft).toBe("h1");
+
+  expect(errors).toEqual([]);
+});
+
+// Giving up reveals the stored solution as a scored loss, and the post-tactic
+// analysis — the SAN move list — is navigable by click and by arrow key. This is a
+// reactive concern (a click or a keypress must actually move the board), so it lives
+// in the browser test. Pinned to the mate-in-4 seed so the move list is several plies
+// long. No drawing is needed: giving up is exactly for when you are stuck with
+// nothing drawn, so the button is pressed on an empty line.
+test("giving up reveals the solution, and the move list navigates by click and arrow key", async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+
+  await pinPuzzle(page, 0.8);
+  await page.goto("/");
+  await expect(page.locator(".board")).toBeVisible();
+
+  const rating = () => page.locator(".elo strong").textContent().then((t) => Number(t));
+  const before = await rating();
+
+  await page.getByRole("button", { name: "Give up" }).click();
+
+  // The board is revealed on the mate, the verdict names the concession, and giving
+  // up cost rating (the delta shows a drop).
+  await expect(page.locator(".board--revealed")).toHaveCount(1);
+  await expect(page.locator(".verdict")).toContainText("gave up");
+  expect(await page.locator(".piece").count()).toBeGreaterThan(0);
+  await expect(page.locator(".elo__delta")).toBeVisible();
+  expect(await rating()).toBeLessThan(before);
+
+  // The move list holds every ply of the solution (the mate-in-4 line is 7 plies).
+  const plies = page.locator(".movelist__ply");
+  expect(await plies.count()).toBeGreaterThan(1);
+
+  // Clicking a move jumps the board to it: the move highlights and the square it
+  // landed on lights up.
+  await plies.first().click();
+  await expect(plies.first()).toHaveClass(/movelist__ply--on/);
+  expect(
+    await page.locator(".square--played").count(),
+    "clicking the first move lights the square it landed on"
+  ).toBeGreaterThan(0);
+
+  // Arrow keys walk the reveal, like a Lichess analysis board. Left to the start
+  // (nothing played, so nothing lit), then right re-lights the first move.
+  await page.keyboard.press("ArrowLeft");
+  expect(
+    await page.locator(".square--played").count(),
+    "arrow-left steps back to the start, where nothing is played"
+  ).toBe(0);
+  await page.keyboard.press("ArrowRight");
+  expect(
+    await page.locator(".square--played").count(),
+    "arrow-right steps forward and re-lights the first move"
+  ).toBeGreaterThan(0);
 
   expect(errors).toEqual([]);
 });
