@@ -18,14 +18,14 @@ use leptos::prelude::*;
 /// The roster for a position, announced in the order a human would read it out:
 /// the side to move first.
 #[component]
-pub fn Roster(#[prop(into)] roster: Signal<roster::Roster>, depth: usize) -> impl IntoView {
+pub fn Roster(#[prop(into)] roster: Signal<roster::Roster>) -> impl IntoView {
     view! {
         <section class="panel" aria-label="Piece locations">
             <h2 class="panel__title">"Roster"</h2>
 
             <p class="panel__tomove">
                 {move || {
-                    format!("{} to play — mate in {depth}.", roster::heading(roster.get().to_move))
+                    format!("{} to play. Find the forced mate.", roster::heading(roster.get().to_move))
                 }}
             </p>
 

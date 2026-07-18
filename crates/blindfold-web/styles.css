@@ -170,35 +170,51 @@ body {
   color: var(--chalk-dim);
 }
 
-/* ---- tiers ------------------------------------------------------------- */
+/* ---- status bar -------------------------------------------------------- */
 
-.tiers {
+.statusbar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
   margin-bottom: 1.5rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--line);
 }
 
-.tier {
+.elo {
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  color: var(--chalk-dim);
+}
+
+.elo strong {
+  margin-left: 0.15rem;
+  color: var(--amber);
+  font-weight: 600;
+  font-size: 1.3rem;
+}
+
+/* The change from the last scored puzzle, chess.com's "+8". */
+.elo__delta {
+  margin-left: 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.elo__delta--up {
+  color: var(--teal);
+}
+
+.elo__delta--down {
+  color: var(--rose);
+}
+
+.statusbar__count {
   font-family: var(--mono);
   font-size: 0.72rem;
-  padding: 0.34rem 0.62rem;
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  background: transparent;
-  color: var(--chalk-dim);
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-}
-
-.tier:hover {
-  color: var(--chalk);
-}
-
-.tier--on {
-  border-color: var(--amber);
-  color: var(--amber);
-  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  color: var(--chalk-faint);
 }
 
 /* ---- layout ------------------------------------------------------------ */
@@ -323,6 +339,13 @@ body {
   transition: none;
 }
 
+/* The square under the pointer when not mid-drag — a light touch so it reads as
+ * "you are here" without competing with the drag's own from/to highlight. */
+.square--hover {
+  background: color-mix(in srgb, var(--amber) 9%, transparent);
+  transition: none;
+}
+
 .coord {
   position: absolute;
   font-family: var(--mono);
@@ -374,32 +397,18 @@ body {
   position: absolute;
   width: calc(100% / var(--board-side));
   height: calc(100% / var(--board-side));
-  padding: 2%;
-  opacity: 0;
-  transform: scale(0.55);
-  animation: piece-appears 0.4s cubic-bezier(0.2, 1.5, 0.4, 1) forwards;
 }
 
+/* Pieces fill the square. The board itself fades in on the reveal (the squares
+ * gaining their colour); the pieces do not pop, because that pop would fire again
+ * on every step through the mate, which reads as flicker rather than payoff. */
 .piece svg {
   display: block;
   width: 100%;
   height: 100%;
 }
 
-@keyframes piece-appears {
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
 /* ---- under the board --------------------------------------------------- */
-
-.hint {
-  margin: 0.8rem 0 0;
-  color: var(--chalk-dim);
-  font-size: 0.88rem;
-}
 
 .facts {
   display: flex;
@@ -544,40 +553,87 @@ body {
   padding: 0 0.2rem;
 }
 
-.promotion {
-  display: flex;
-  gap: 0.15rem;
+/* The chosen promotion piece, shown (not chosen) at the end of a line step — the
+ * choice itself is made on the board, in the popup below. */
+.line__promotion {
+  display: block;
+  width: 1.15rem;
+  height: 1.15rem;
   margin-left: auto;
 }
 
-.promotion__choice {
-  display: grid;
-  place-items: center;
-  width: 1.5rem;
-  height: 1.5rem;
-  padding: 0.1rem;
-  border: 1px solid transparent;
-  border-radius: 2px;
-  background: transparent;
-  cursor: pointer;
-  opacity: 0.4;
-  transition: opacity 0.15s, border-color 0.15s;
-}
-
-.promotion__choice:hover:not(:disabled) {
-  opacity: 0.8;
-}
-
-.promotion__choice--on {
-  opacity: 1;
-  border-color: var(--amber);
-  background: color-mix(in srgb, var(--amber) 15%, transparent);
-}
-
-.promotion__choice svg {
+.line__promotion svg {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* ---- board promotion popup --------------------------------------------- */
+
+.board__promotion {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+}
+
+/* Dims the board and catches any click outside the pieces, which cancels. */
+.promotion-backdrop {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--ink) 55%, transparent);
+}
+
+/* A column of choices dropping from the promotion square. On the board's light
+ * wood in both themes, so black pieces read as clearly as white ones — the same
+ * reason the roster rims its black pieces. */
+.promotion-picker {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--square-light);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+
+.promotion-picker__choice {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 6%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 0.12s;
+}
+
+.promotion-picker__choice:hover {
+  background: color-mix(in srgb, var(--amber) 30%, var(--square-light));
+}
+
+.promotion-picker__choice svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The "no promotion" exit, for a move that only matched promotion geometry. */
+.promotion-picker__plain {
+  width: 100%;
+  padding: 0.3rem 0.15rem;
+  border: none;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  color: var(--chalk-dim);
+  font-size: 0.6rem;
+  line-height: 1.15;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: background-color 0.12s;
+}
+
+.promotion-picker__plain:hover {
+  background: color-mix(in srgb, var(--amber) 30%, var(--square-light));
 }
 
 /* ---- controls ---------------------------------------------------------- */
@@ -586,6 +642,19 @@ body {
   display: flex;
   gap: 0.45rem;
   margin-top: 0.9rem;
+}
+
+/* Reveal navigation, pushed left so "Next puzzle" sits at the right end. */
+.stepper {
+  display: flex;
+  gap: 0.3rem;
+  margin-right: auto;
+}
+
+.button--step {
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+  line-height: 1;
 }
 
 .button {
@@ -679,11 +748,5 @@ body {
   *::after {
     transition: none !important;
     animation-duration: 0.01ms !important;
-  }
-
-  /* The keyframe still has to land, or every piece stays at opacity 0. */
-  .piece {
-    opacity: 1;
-    transform: none;
   }
 }

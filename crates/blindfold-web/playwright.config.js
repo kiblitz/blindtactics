@@ -14,8 +14,9 @@ const ORIGIN = `http://127.0.0.1:${PORT}`;
 // runs. See CLAUDE.md, "The browser is the only place some bugs exist".
 module.exports = defineConfig({
   testDir: "./e2e",
-  // The reveal is a timed animation; running specs in parallel on one page would
-  // interleave their timers. One at a time.
+  // A handful of specs sharing one built bundle on one static server. Run them
+  // serially so the output stays readable and the run stays deterministic —
+  // there is no timer to interleave, just no reason to contend for one server.
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
@@ -26,7 +27,20 @@ module.exports = defineConfig({
     baseURL: ORIGIN,
     trace: "on-first-retry",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // A viewport tall enough for the whole board to be on-screen at once. The board
+  // is an `aspect-ratio: 1` box as wide as the layout allows (~660px at this
+  // width) and sits below the masthead, so its lower edge falls near y≈990 —
+  // past the 720px default. A drag endpoint below the fold is unreachable:
+  // `mouse.down()` there lands on no square and no arrow is drawn, which fails
+  // deterministically for any puzzle whose line touches the lower ranks. Both
+  // endpoints of every arrow must be visible at once, so scrolling per-square
+  // cannot substitute — the viewport has to hold the entire board.
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 1280 } },
+    },
+  ],
   // Build the release bundle, then serve it statically. The first CI run has a
   // cold cache: a full release wasm compile plus trunk downloading wasm-bindgen
   // and wasm-opt, all inside this budget before the health check — hence the

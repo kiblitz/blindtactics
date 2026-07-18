@@ -251,16 +251,16 @@ pub struct Step {
     pub after: shakmaty::Chess,
 }
 
-/// Replay `line` against one concrete defense, for animating a solve.
+/// Replay `line` against one concrete defense, for the reveal a solve steps through.
 ///
 /// [`judge`] answers *whether* a line mates; this answers *what to show*. The UI
-/// needs one concrete sequence to animate, but a linear line generally has many
+/// needs one concrete sequence to step through, but a linear line generally has many
 /// defenses, so one must be chosen.
 ///
 /// **The defense that holds out longest is chosen**, not the first legal one. By
-/// linearity any choice animates a *correct* line, so this looks like it should
+/// linearity any choice steps through a *correct* line, so this looks like it should
 /// not matter — but it is not correctness, it is the reveal, which is the entire
-/// payoff of solving blind. A defense that walks into a faster mate would animate
+/// payoff of solving blind. A defense that walks into a faster mate would show
 /// a two-move finish for a puzzle sold as mate-in-3, and the user would be left
 /// wondering what the third arrow was for. Picking the longest survivor always
 /// shows the depth advertised, and costs one [`judge`] per candidate reply on a
@@ -324,7 +324,7 @@ fn longest_defense(pos: &shakmaty::Chess, rest: &[arrow::Arrow]) -> shakmaty::Mo
                 // Unreachable on a judged line: linearity means every defense is
                 // mated by `rest`. Scoring 0 rather than panicking keeps a reveal
                 // from taking the page down if that ever stops being true — the
-                // animation would just pick a different, still-legal defense.
+                // reveal would just step through a different, still-legal defense.
                 Verdict::Refuted { .. } | Verdict::TooComplex { .. } => 0,
             }
         })

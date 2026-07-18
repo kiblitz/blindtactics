@@ -141,9 +141,15 @@ blindfold-chess-trainer/
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 44 tests, clippy clean. Blank board, drag-drawn numbered
-  arrows, roster panel with real piece artwork, submit, animated reveal. Builds to a
-  ~680 KiB wasm bundle with `trunk build --release` (the database is ~46 KiB of that).
+- `blindfold-web` — built, 47 tests (+ 3 Playwright tests in one spec, run as 4
+  cases — the reveal test runs on two pinned puzzles), clippy clean. Blank board,
+  drag-drawn numbered arrows, roster panel with real piece artwork, an inline
+  promotion picker, a hover highlight, submit, and a static reveal stepped through by
+  hand (◀/▶, Lichess-analysis style — no timer, no auto-advancing animation; the
+  board still fades in on reveal). The puzzle is never
+  labelled with its mate depth; puzzles are drawn at random from a pool near the
+  user's Elo, which is scored on the first submission and persisted to `localStorage`.
+  Builds to a wasm bundle with `trunk build --release` (the database is ~46 KiB of that).
   **KiB, and stated as such deliberately**: an earlier draft said "687 KB" from a
   byte count read as decimal while `database.rs` said "46 KB" from the same count
   read as binary, so the one file disagreed with itself. The bundle also drifts with
@@ -197,10 +203,10 @@ a thread pool, and a file writer, and nothing worth a test.
 no toolchain. Anything that can live in core, must.
 
 The web crate should contain almost no logic worth testing *in its components*. That it has
-44 tests anyway is not a contradiction: they cover `square`, `session` and `database`, the
-crate's Leptos-free parts, which is exactly where its logic was pushed so a native test
-could reach it. The rule bites on `board`/`panel`/`line`/`app` — if a test wants to reach
-into one of those, the thing it wants is in the wrong module.
+47 tests anyway is not a contradiction: they cover `square`, `session`, `rating` and
+`database`, the crate's Leptos-free parts, which is exactly where its logic was pushed so a
+native test could reach it. The rule bites on `board`/`panel`/`line`/`app` — if a test wants
+to reach into one of those, the thing it wants is in the wrong module.
 
 This matters three ways: the test suite stays fast; the same solver is shared by the
 offline curation tool and the live app (so the DB and the app cannot disagree about what
@@ -211,8 +217,9 @@ offline curation tool and the live app (so the DB and the app cannot disagree ab
 - `arrow` — the user's unit of input, `(from, to, promotion)`. **Read this module first**;
   the decision to make arrows rather than moves the unit of identity explains most of the
   rest of the design.
-- `mate` — `judge` (does this line mate against every defense?), `playback` (what the UI
-  animates on a solve), and `find_linear` / `min_depth` (search). The heart of the project.
+- `mate` — `judge` (does this line mate against every defense?), `playback` (the plies the
+  UI steps through on a solve), and `find_linear` / `min_depth` (search). The heart of the
+  project.
 - `roster` — piece locations as **structured data** (`roster::Entry { role, squares }`),
   ordered K/Q/R/B/N/P, **plus castling rights and the en-passant square**. Renders to text
   (`text`, `name`, `color_name`, `heading`) and later to speech, never a string; the *SVG*
@@ -241,17 +248,26 @@ its only consumer. That is the line; it is not "no strings in core".
 - `square` — the app's only arithmetic: which square a pointer is over, where a square
   is on screen. **No Leptos in it**, so it is tested natively. Read its doc before
   touching orientation.
-- `session` — which puzzle, what was drawn, `solve` (one `judge` call), `step_at` (the
-  replay's off-by-one), `explain` (a refutation as a sentence), and `Attempt` (the reveal
-  state machine — draw/undo/clear/toggle_promotion/submit/reset/tick — folded out of `app`'s
-  loose signals so a native test can drive every transition). Also no Leptos, also
-  natively tested — `explain` and `step_at` live here rather than in `line`/`app` precisely
-  so a native test can reach them.
+- `session` — two Leptos-free state machines plus the pure helpers that feed them.
+  `Session { puzzles, at }` is *which* puzzle, and its `choose_near(puzzles, rating,
+  exclude, r)` is the adaptive picker — sort by rating distance, take the nearest
+  `SELECTION_POOL`, index by a caller-supplied random `r` — a pure function so the app
+  supplies `Math::random()` and a native test supplies a fixed number. `Attempt {
+  arrows, solve, ply, scored }` is *this* attempt: draw/undo/clear/set_promotion,
+  `submit` (one `judge` call, returns `Some(Outcome)` only on the first scoring
+  submission so a miss-then-solve cannot re-score), and the manual reveal cursor
+  (`step_back`/`step_forward`/`can_step_back`/`can_step_forward`, plus `step_at` for
+  the replay's off-by-one). `explain` renders a refutation as a sentence. All native,
+  because this is where the logic was pushed so `line`/`app` need none.
+- `rating` — the Elo update (`update(user, puzzle, Outcome)`), and `load`/`save` over
+  `localStorage`. The arithmetic is pure and native-tested; only the storage I/O needs
+  a browser, and it is the only thing here that touches one.
 - `database` — the committed JSONL, `include_str!`d.
 - `board`, `panel`, `line`, `app` — components. Markup and event plumbing only.
 - `pieces` — Cburnett's artwork, taken from lila (GPLv2-or-later, so compatible with our
   GPL-3.0-or-later), compiled in. See `assets/pieces/README.md`.
-- `constants` — interface policy: board side, arrow geometry, reveal pacing.
+- `constants` — interface policy: board side, arrow geometry, Elo constants, selection
+  pool size.
 
 **A lib as well as a bin, for the same reason `blindfold-curate` is** — `tests/` cannot
 import a binary crate's modules. `main.rs` mounts the app and does nothing else.
@@ -259,38 +275,48 @@ import a binary crate's modules. `main.rs` mounts the app and does nothing else.
 **Leptos's prelude is glob-imported** in the component modules, against the global
 no-wildcard rule. `view!` needs a large set of traits and types in scope and Leptos is
 built around it; this is the same exception the OCaml rules make for `Core`. The
-non-component modules (`square`, `session`, `database`, `pieces`, `constants`) do not
-import it at all, which is the line worth holding.
+non-component modules (`square`, `session`, `rating`, `database`, `pieces`, `constants`)
+do not import it at all, which is the line worth holding.
 
 ### The browser is the only place some bugs exist
 
-The reveal's replay is driven by a Leptos `Effect` that re-arms its own timer. The first
-version read `ply` with `get_untracked`, so the effect never re-ran: the board took
-**exactly one ply** and froze there, still captioned "Mate." Every native test passed —
-`judge` was right, `playback` was right, the pure geometry was right. The bug was in the
-wiring, and only a browser could see it.
+The reveal is now **stepped by hand** — ◀/▶ move a cursor over the mate, Lichess-analysis
+style — so the self-arming timer that drove the old auto-animation is gone, and with it the
+`epoch`/`tick` machinery. But the lesson that motivated the browser test outlived the timer,
+so it is recorded here rather than deleted. The first auto-animation read `ply` with
+`get_untracked`, so its effect never re-ran: the board took **exactly one ply** and froze
+there, still captioned "Mate." Every native test passed — `judge` was right, `playback` was
+right, the pure geometry was right. The bug was in the reactive wiring, and only a browser
+could see it. **`get_untracked` in an `Effect` is how you turn a loop into a single shot** —
+reach for it only to break a cycle you have actually diagnosed.
 
-So `tests/database.rs::the_replay_ends_in_checkmate` pins the *data* half (a mate in
-N replays `2N-1` plies and ends in checkmate), the reveal cursor's transitions are pinned
-natively as a pure state machine (`session::Attempt`'s tests — `tick`, the epoch/ply
-guards, the stale-timer case), and the reactive half is checked by driving chromium with
-Playwright. That driver is now **checked in**: `crates/blindfold-web/e2e/reveal.spec.js`,
-run by CI. It draws a real solution and asserts the replay lights **more than one** square
-over its animation — a frozen replay lit exactly one. The teeth are verified: simulate the
-freeze (make `Attempt::tick` advance only from ply 0) and that assertion fails.
+The manual cursor has the same failure surface — a step button that reads the wrong signal,
+or fails to re-render — so the guard is split the same way. `tests/database.rs::the_replay_
+ends_in_checkmate` pins the *data* half (a mate in N replays `2N-1` plies and ends in
+checkmate); `Attempt`'s cursor transitions (`step_back`/`step_forward` and their bounds,
+`step_at`'s off-by-one) are pinned natively as a pure state machine; and the reactive half —
+that clicking a real button actually moves the board — is checked by driving chromium with
+Playwright. That driver is **checked in**: `crates/blindfold-web/e2e/reveal.spec.js`, run by
+CI. It draws a real solution, submits, steps all the way back to the empty start (nothing
+lit, pieces still shown), then one step forward, and asserts the first move re-lights — a
+reveal that did not actually move fails both halves. A third test guards the promotion
+picker's "no promotion" exit (see "Promotion" below).
 
-The corollary, stated because it cost a cycle: **`get_untracked` in an `Effect` is how
-you turn a loop into a single shot.** Reach for it only to break a cycle you have
-actually diagnosed.
-
-The timer carries **two** guards and both are load-bearing. `epoch` is identity — a timer
-outlives the attempt that armed it, and one in flight when the user hits "Next" must not
-step the next reveal forward. `ply` is idempotence — the effect can re-run for a ply it has
-already armed, and two timers each incrementing would skip a move. The first version had
-only the ply check and a comment claiming it was the ownership check; it was not, and a
-timer armed at ply 0 sailed through it because `reset` puts ply back to 0 too. A comment
-that asserts a property the code lacks is worse than no comment: the next reader relies on
-it.
+**Two e2e traps this cost real time on, both about the *harness*, not the app.** First,
+the board is an `aspect-ratio: 1` box below the masthead, so at Playwright's default 720px
+viewport its lower edge (~y=990) is **below the fold**. A drag endpoint off-screen registers
+on no square — `mouse.down()` there fires no `pointerdown` on any square — so any puzzle whose
+line reached the lower ranks failed *deterministically*, and a retry loop could not help
+because the square was genuinely unreachable. It masqueraded as flakiness only because the
+puzzle was chosen at random. Fixed by sizing the viewport to the whole board
+(`playwright.config.js`), and each dragging test now asserts `board.y + board.height <=`
+viewport height so a layout regrowth fails loudly instead of resurfacing this. Second, the
+reveal spec now **pins** the puzzle by overriding `Math.random` to a fixed seed (`pinPuzzle`)
+rather than solving a random one: CI retries the whole test, and a random puzzle let a
+puzzle-specific failure pass on the retry against an unrelated one. The seeds are chosen
+against the committed database's rating order to cover, deliberately rather than by chance,
+a mate-in-3 whose line includes a promotion and a mate-in-4 whose first move *originates* on
+the lowest rank (the below-the-fold endpoint the viewport fix keeps reachable).
 
 ### Promotion, and what the app is allowed to know
 
@@ -308,6 +334,21 @@ unwanted picker. That is the honest cost of not guessing, and it is cheap.
 The first cut used "lands on the last rank" and put a promotion picker beside *both*
 moves of a rook mate-in-2. The narrower condition is not a heuristic; it is a strictly
 necessary precondition, which is why it is allowed.
+
+**Because the picker fires on a necessary-not-sufficient condition, it must have a "no
+promotion" exit — and this was got wrong once, badly.** The first inline picker was modal
+with only two ways out: pick a piece, or click away to *delete* the arrow. For the rook
+lift `Rf7-f8#` that is a trap — the only legal move it lets you enter is the illegal
+promoting one, and cancelling throws the move away. **57 puzzles, 14% of the database,
+have a solver key that is a non-pawn move to the last rank** (measured; 9 of them
+mate-in-1), and every one was unenterable. The picker now offers Q/R/B/N *and* a "no
+promotion" choice that keeps the plain move, with click-away still cancelling. While it is
+open the panel's submit controls are disabled — the picker opens on geometry alone, so an
+unresolved move behind it must not be judged (that too was a bug: submit reached past the
+board-only backdrop and scored a loss for a move still being entered). The lifted
+`promoting` signal in `app.rs` is what lets the panel see the choice is pending. Guarded by
+`reveal.spec.js`'s promotion test, which draws a last-rank non-pawn move and proves it can
+still be entered as the plain move it is.
 
 ### The roster gate — why curation filters on size
 

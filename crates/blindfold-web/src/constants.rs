@@ -20,37 +20,29 @@ pub const VIEWBOX_SIDE: u32 = 800;
 /// Side of one square in [`VIEWBOX_SIDE`] units.
 pub const SQUARE_SIDE: u32 = VIEWBOX_SIDE / BOARD_SIDE as u32;
 
+/// One square as a percentage of the board's side.
+///
+/// A cell index scales straight to a CSS percentage by this, so absolutely-placed
+/// layers — the pieces and the promotion popup — sit on the grid without each
+/// re-deriving `100 / BOARD_SIDE`.
+pub const PERCENT_PER_SQUARE: f64 = 100.0 / BOARD_SIDE as f64;
+
 /// Arrow shaft thickness, in viewBox units.
 pub const ARROW_WIDTH: u32 = 9;
 
 /// Radius of the numbered disc at an arrow's tail, in viewBox units.
 pub const ARROW_BADGE_RADIUS: u32 = 16;
 
-/// How far short of the target square's centre an arrow stops, in viewBox units.
+/// How far short of the target square's centre the arrow's *shaft* stops, in
+/// viewBox units. The head is then drawn forward from there (see
+/// [`ARROW_HEAD_ANCHOR_X`]), its tip landing a little short of the centre.
 ///
-/// Without it the head lands dead centre and two arrows meeting at one square
-/// overlap into a blob. Pulling back leaves the square's centre legible.
-pub const ARROW_HEAD_INSET: f64 = 22.0;
-
-/// Milliseconds between plies when a solved line is replayed.
-///
-/// The reveal is the entire payoff of solving blind, so it is paced to be read,
-/// not to be efficient.
-pub const PLAYBACK_MS: u64 = 600;
-
-/// Milliseconds before the first ply of the replay.
-///
-/// The board has just gone from void to pieces; moving something immediately
-/// would step on the moment the user solved the puzzle for.
-///
-/// **Coupled to `styles.css` and nothing enforces it.** The reveal is two
-/// animations there — the void-to-board fade (`.board--revealed .square`, 0.5s)
-/// and the pieces arriving (`piece-appears`, 0.4s) — and this is their sum, so
-/// the first move waits for the reveal to finish rather than cutting across it.
-/// Retune either and the pacing desyncs with nothing failing. Emitting the
-/// durations as custom properties from here would close it; until then, this
-/// paragraph is the link.
-pub const REVEAL_MS: u64 = 900;
+/// Two jobs at once. It keeps the tip off the square's centre so two arrows
+/// meeting on one square do not overlap into a blob, and — since the shaft now
+/// ends at the head's wide base — it is also what leaves room for the whole head.
+/// Big enough to clear the head (`ANCHOR_X` at the base means the head projects its
+/// full length forward) with a little gap beyond the tip.
+pub const ARROW_HEAD_INSET: f64 = 42.0;
 
 /// The arrowhead marker's `id`, and the `url(#...)` that references it.
 ///
@@ -78,13 +70,15 @@ pub const ARROW_HEAD_MARGIN: u32 = 1;
 
 /// Where the line's endpoint is pinned along the head (`refX`/`refY`).
 ///
-/// `refY` is the midline, so the head is centred on the shaft. `refX` sits *behind*
-/// the tip — the tip is at `ARROW_HEAD_VIEWBOX - ARROW_HEAD_MARGIN` (9), the anchor
-/// at 7 — so the point projects a little past where the shaft stops and caps it
-/// cleanly. Tuned against [`ARROW_HEAD_INSET`], which pulls the shaft back to leave
-/// room for exactly this head; the two live together because splitting them is how
-/// they drift.
-pub const ARROW_HEAD_ANCHOR_X: u32 = 7;
+/// `refY` is the midline, so the head is centred on the shaft. `refX` is `0` — the
+/// head's *base* — so the shaft ends where the triangle is at its widest and the
+/// whole head projects forward from there. That is the fix for the stray "stub":
+/// with the anchor near the tip (it was `7`), the shaft ended under the *narrow*
+/// end of the head, and the stroke's cap poked out either side of it. Ending at the
+/// base tucks the cap under the widest part, where nothing shows. Tuned against
+/// [`ARROW_HEAD_INSET`], which pulls the shaft back to leave room for exactly this
+/// head; the two live together because splitting them is how they drift.
+pub const ARROW_HEAD_ANCHOR_X: u32 = 0;
 pub const ARROW_HEAD_ANCHOR_Y: u32 = 5;
 
 /// The head's size as a multiple of [`ARROW_WIDTH`] — `marker*` units scale with
@@ -103,3 +97,38 @@ pub const ARROW_NUMBER_SIZE: u32 = 17;
 /// `dominant-baseline` value that is reliable across browsers for this, hence a
 /// measured constant.
 pub const ARROW_NUMBER_BASELINE_EM: &str = "0.36em";
+
+/// The rating a new user starts at, before any puzzle has moved it.
+///
+/// Puzzle ratings in the database span roughly 600–2600, so 1200 is mid-pack and
+/// settles quickly toward the user's real level.
+pub const ELO_START: u32 = 1200;
+
+/// Elo K-factor: the most one puzzle can move the rating.
+pub const ELO_K: f64 = 32.0;
+
+/// Logistic scale of the Elo expected-score curve. 400 is the classic value — a
+/// 400-point edge is about 10:1 expected odds.
+pub const ELO_SCALE: f64 = 400.0;
+
+/// Base of the Elo expected-score logistic. The `10` half of "a 400-point edge is
+/// about 10:1 odds" — it pairs with [`ELO_SCALE`] and is meaningless without it, so
+/// the two live together rather than one being named and the other an inline
+/// literal in the formula.
+pub const ELO_LOG_BASE: f64 = 10.0;
+
+/// Bounds on the stored rating, so a long streak either way cannot drive it
+/// somewhere absurd.
+pub const ELO_FLOOR: u32 = 100;
+pub const ELO_CEILING: u32 = 3000;
+
+/// The `localStorage` key the rating persists under.
+pub const ELO_STORAGE_KEY: &str = "blindfold.elo";
+
+/// How many of the closest-rated puzzles the next one is drawn from.
+///
+/// Selection is "random, near your rating": the candidates are the
+/// `SELECTION_POOL` puzzles whose rating is nearest the user's, and one of those
+/// is chosen uniformly. Small enough that difficulty tracks the user, large
+/// enough not to serve the same handful over and over.
+pub const SELECTION_POOL: usize = 24;

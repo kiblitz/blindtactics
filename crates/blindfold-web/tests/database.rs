@@ -38,9 +38,10 @@ fn every_depth_the_curator_writes_is_embedded() {
     );
 }
 
-/// The file order is what `Session::advance` walks, and the tier chips are built
-/// from it, so a shuffled include list would leave "Mate in 3" starting somewhere
-/// arbitrary.
+/// `database::load` concatenates the four `mate_in_N.jsonl` files in ascending
+/// depth order. Selection no longer depends on that order — `choose_near` picks by
+/// rating — but pinning it catches an out-of-order `include_str!` list, which would
+/// mean the embedded pool was assembled differently than the module claims.
 #[test]
 fn puzzles_are_embedded_in_depth_order() {
     let depths: Vec<usize> = database::load().iter().map(|p| p.depth).collect();
@@ -89,7 +90,7 @@ fn the_stored_line_solves_every_embedded_puzzle() {
     }
 }
 
-/// Playback is what the reveal animates, and the reveal is the payoff. It must
+/// Playback is what the reveal steps through, and the reveal is the payoff. It must
 /// end on the mate — a replay that stops early leaves the board showing a
 /// position the user did not solve, captioned as though they had.
 #[test]

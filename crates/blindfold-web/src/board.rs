@@ -5,15 +5,17 @@
 //! [`crate::square`] or by `blindfold_core`, so what is left here is markup and
 //! event plumbing.
 //!
-//! The board is three stacked layers in one `aspect-ratio: 1` box: the squares,
-//! an SVG overlay for the arrows, and the pieces. Only the squares take pointer
-//! events; the overlay and the pieces are `pointer-events: none` so a drag that
-//! crosses an arrow it has already drawn does not get swallowed by it.
+//! The board is layers in one `aspect-ratio: 1` box: the squares, an SVG overlay
+//! for the arrows, the pieces, and — while the user is choosing a promotion — a
+//! popup at the destination square. Only the squares (and the popup) take pointer
+//! events; the arrows and pieces are `pointer-events: none` so a drag that crosses
+//! an arrow it has already drawn does not get swallowed by it.
 
 use crate::constants;
 use crate::pieces;
 use crate::square;
 use blindfold_core::arrow;
+use blindfold_core::roster;
 use leptos::prelude::*;
 use shakmaty::Position as _;
 
@@ -24,6 +26,14 @@ use shakmaty::Position as _;
 /// moving, and "no drag started here" and "a drag started on a1" are different
 /// states that must not be told apart by a coordinate.
 type Dragging = RwSignal<Option<shakmaty::Square>>;
+
+/// An open promotion popup: the square it sits on, and the index of the
+/// provisional arrow it is choosing a piece for.
+///
+/// Public so [`crate::app`], which owns the signal, constructs it through this
+/// alias rather than re-spelling the tuple — the shape and the meaning of its two
+/// fields live in one place.
+pub type Promoting = RwSignal<Option<(shakmaty::Square, usize)>>;
 
 /// The square under a pointer event, from the board element's own box.
 ///
@@ -64,8 +74,8 @@ fn square_of(
 /// The blank board, the arrows drawn on it, and — once solved — the pieces.
 ///
 /// `revealed` is the position to show, `None` while the user is still blind. It
-/// is a position rather than a bool because the reveal animates a line: each ply
-/// hands this a new position, and the board just draws whatever it is given.
+/// is a position rather than a bool because the reveal steps through a line: each
+/// ply hands this a new position, and the board just draws whatever it is given.
 #[component]
 pub fn Board(
     orientation: square::Orientation,
@@ -77,6 +87,20 @@ pub fn Board(
     /// Called with each arrow the user completes by dragging.
     #[prop(into)]
     on_draw: Callback<arrow::Arrow>,
+    /// Called with `(arrow index, role)` when the user picks a promotion piece in
+    /// the board popup.
+    #[prop(into)]
+    on_promote: Callback<(usize, shakmaty::Role)>,
+    /// Called when the user dismisses the promotion popup by clicking away. The
+    /// provisional arrow is removed — a click outside the picker cancels the move,
+    /// the way it does in Lichess. Choosing "no promotion" *keeps* the plain move
+    /// instead; that is a separate exit (see the picker's own button).
+    #[prop(into)]
+    on_cancel: Callback<()>,
+    /// The open promotion popup, if any: the square it sits on and the index of the
+    /// provisional arrow it is choosing for. Owned by the app so it can disable
+    /// submission while a choice is pending — an unresolved move must not be judged.
+    promoting: Promoting,
     #[prop(into)] revealed: Signal<Option<shakmaty::Chess>>,
     /// The square a move just landed on, lit so the eye can follow the replay.
     #[prop(into)]
@@ -87,11 +111,12 @@ pub fn Board(
 ) -> impl IntoView {
     let dragging: Dragging = RwSignal::new(None);
     // Where the pointer is now, so the in-flight arrow follows it rather than
-    // appearing only once released.
+    // appearing only once released — and, when no drag is in progress, so the
+    // square under the pointer can be highlighted.
     let hovering: RwSignal<Option<shakmaty::Square>> = RwSignal::new(None);
 
     let on_down = move |ev: leptos::ev::PointerEvent| {
-        if locked.get() {
+        if locked.get_untracked() || promoting.get_untracked().is_some() {
             return;
         }
         // Capture, so a drag that leaves the board still delivers its `pointerup`
@@ -108,10 +133,20 @@ pub fn Board(
     };
 
     let on_move = move |ev: leptos::ev::PointerEvent| {
-        if dragging.get_untracked().is_none() {
+        // Modal while a promotion is open, like `on_down`: the backdrop swallows
+        // `pointerdown` but not `pointermove`, so without this the hover highlight
+        // would still track the pointer under the covering backdrop.
+        if locked.get_untracked() || promoting.get_untracked().is_some() {
             return;
         }
-        hovering.set(square_of(&ev, orientation));
+        // Tracked whether or not a drag is in progress: mid-drag it aims the arrow,
+        // and otherwise it drives the hover highlight. Only write on a boundary
+        // crossing — a pointermove within the same square would notify every
+        // square's `class:` closure for no visible change.
+        let now = square_of(&ev, orientation);
+        if hovering.get_untracked() != now {
+            hovering.set(now);
+        }
     };
 
     let on_up = move |ev: leptos::ev::PointerEvent| {
@@ -127,7 +162,20 @@ pub fn Board(
         if from == to || locked.get_untracked() {
             return;
         }
-        on_draw.run(arrow::Arrow::new(from, to));
+        let candidate = arrow::Arrow::new(from, to);
+        // Whether this drag could be a pawn promoting, read off the drag alone —
+        // see `arrow::Arrow::could_be_promotion`. Computed before `on_draw` moves
+        // the arrow away.
+        let promotes = candidate.could_be_promotion(orientation.0);
+        // `on_draw` is about to append this arrow, so it lands at the current
+        // length. The board is modal while a promotion is open (`on_down` bails and
+        // the backdrop swallows events), so nothing can slip in after it — the
+        // provisional arrow stays at this index until it is picked or cancelled.
+        let index = drawn.with_untracked(Vec::len);
+        on_draw.run(candidate);
+        if promotes {
+            promoting.set(Some((to, index)));
+        }
     };
 
     let squares = square::in_layout_order(orientation);
@@ -140,6 +188,7 @@ pub fn Board(
             on:pointermove=on_move
             on:pointerup=on_up
             on:pointercancel=move |_| { dragging.set(None); hovering.set(None); }
+            on:pointerleave=move |_| { hovering.set(None); }
         >
             <div class="board__squares">
                 {squares
@@ -160,6 +209,11 @@ pub fn Board(
                                 class:square--from=move || dragging.get() == Some(sq)
                                 class:square--to=move || {
                                     dragging.get().is_some() && hovering.get() == Some(sq)
+                                }
+                                class:square--hover=move || {
+                                    !locked.get()
+                                        && dragging.get().is_none()
+                                        && hovering.get() == Some(sq)
                                 }
                                 class:square--played=move || highlight.get() == Some(sq)
                             >
@@ -183,16 +237,12 @@ pub fn Board(
                                 .into_iter()
                                 .map(|(sq, piece)| {
                                     let (col, row) = square::cell(sq, orientation);
-                                    // A square is one BOARD_SIDE-th of the board,
-                                    // and the board is the containing box, so a
-                                    // cell index scales straight to a percentage.
-                                    let per_square =
-                                        100.0 / f64::from(constants::BOARD_SIDE as u32);
+                                    let per = constants::PERCENT_PER_SQUARE;
                                     view! {
                                         <div
                                             class="piece"
-                                            style:left=format!("{}%", f64::from(col) * per_square)
-                                            style:top=format!("{}%", f64::from(row) * per_square)
+                                            style:left=format!("{}%", f64::from(col) * per)
+                                            style:top=format!("{}%", f64::from(row) * per)
                                             inner_html=pieces::svg(piece.color, piece.role)
                                         />
                                     }
@@ -200,6 +250,111 @@ pub fn Board(
                                 .collect_view()
                         })
                 }}
+            </div>
+
+            {move || {
+                promoting
+                    .get()
+                    .map(|(sq, index)| {
+                        view! {
+                            <Promotion
+                                square=sq
+                                index=index
+                                orientation=orientation
+                                on_promote=on_promote
+                                on_cancel=Callback::new(move |()| {
+                                    on_cancel.run(());
+                                    promoting.set(None);
+                                })
+                                on_pick=Callback::new(move |()| promoting.set(None))
+                            />
+                        }
+                    })
+            }}
+        </div>
+    }
+}
+
+/// The promotion popup: a column of piece choices at the destination square, over
+/// a full-board backdrop that cancels on any click outside it.
+///
+/// Three exits, because the picker opens on geometry alone and the move under it
+/// may not be a pawn's ([`arrow::Arrow::could_be_promotion`] is necessary, not
+/// sufficient): pick a piece to promote, choose **no promotion** to keep the plain
+/// move (a rook lift to the last rank is a real, legal move), or click away to take
+/// the whole move back. Without the middle exit the ~14% of puzzles whose key is a
+/// non-pawn move to the last rank could not be entered at all.
+#[component]
+fn Promotion(
+    square: shakmaty::Square,
+    index: usize,
+    orientation: square::Orientation,
+    #[prop(into)] on_promote: Callback<(usize, shakmaty::Role)>,
+    #[prop(into)] on_cancel: Callback<()>,
+    /// Called once the choice is resolved — a piece picked or "no promotion" — so
+    /// the board can close the popup. The plain arrow is already drawn, so closing
+    /// after "no promotion" simply leaves it in place.
+    #[prop(into)]
+    on_pick: Callback<()>,
+) -> impl IntoView {
+    // The promoting pawn is always the solver's, and the board is drawn from the
+    // solver's side, so the piece colour is exactly the orientation's.
+    let color = orientation.0;
+    let (col, row) = square::cell(square, orientation);
+    let per = constants::PERCENT_PER_SQUARE;
+
+    view! {
+        <div class="board__promotion">
+            // The backdrop swallows the pointer so the modal board draws no arrow
+            // behind it, and any press cancels the promotion.
+            <div
+                class="promotion-backdrop"
+                on:pointerdown=move |ev| {
+                    ev.stop_propagation();
+                    on_cancel.run(());
+                }
+            ></div>
+            <div
+                class="promotion-picker"
+                style:left=format!("{}%", f64::from(col) * per)
+                style:top=format!("{}%", f64::from(row) * per)
+                style:width=format!("{per}%")
+                // Keep the picker's own pointer events off the board's drag logic.
+                on:pointerdown=|ev| ev.stop_propagation()
+                on:pointerup=|ev| ev.stop_propagation()
+            >
+                {blindfold_core::constants::PROMOTABLE
+                    .into_iter()
+                    .map(|role| {
+                        view! {
+                            <button
+                                class="promotion-picker__choice"
+                                aria-label=roster::name(role, false)
+                                title=roster::name(role, false)
+                                on:click=move |ev| {
+                                    ev.stop_propagation();
+                                    on_promote.run((index, role));
+                                    on_pick.run(());
+                                }
+                            >
+                                <span inner_html=pieces::svg(color, role) />
+                            </button>
+                        }
+                    })
+                    .collect_view()}
+                // The escape hatch for a move that only *looked* like a promotion:
+                // keep the arrow as the plain move it already is.
+                <button
+                    class="promotion-picker__plain"
+                    aria-label="Move without promoting"
+                    title="Move without promoting"
+                    on:click=move |ev| {
+                        ev.stop_propagation();
+                        on_pick.run(());
+                    }
+                >
+                    "no promotion"
+                </button>
             </div>
         </div>
     }
@@ -314,7 +469,7 @@ fn Shaft(
                 x2=hx
                 y2=hy
                 stroke-width=constants::ARROW_WIDTH
-                stroke-linecap="round"
+                stroke-linecap="butt"
                 marker-end=format!("url(#{})", constants::ARROW_HEAD_ID)
             />
             {number

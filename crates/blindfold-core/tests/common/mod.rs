@@ -162,13 +162,13 @@ pub const SMOTHERED: &str = "6rk/6pp/8/6N1/8/8/8/6K1 w - - 0 1";
 /// - `Kc2` — mated by the very next arrow, so only two of the three are ever shown.
 /// - `Ke2` — holds out, and the full three-arrow line is played.
 ///
-/// Both are correct animations of a correct solve. Only one shows the user the
+/// Both are correct replays of a correct solve. Only one shows the user the
 /// puzzle they were actually asked to solve; taking the defender's first legal
-/// reply would have picked `Kc2` and quietly animated a mate-in-2.
+/// reply would have picked `Kc2` and quietly shown a mate-in-2.
 ///
 /// Found by search, not by hand, and the search is the point: divergence turned up
 /// after examining just **11** minimal mate-in-3s, so this is ordinary rather than
-/// exotic — roughly one real mate-in-3 in ten would animate short.
+/// exotic — roughly one real mate-in-3 in ten would replay short.
 ///
 /// `min_depth` is 3, so unlike a hand-picked position this one could genuinely
 /// ship as a mate-in-3 puzzle: there is no faster mate for `verify` to reject it

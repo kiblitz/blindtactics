@@ -141,6 +141,7 @@ version = "0.0.1"
 dependencies = [
  "blindfold-core",
  "console_error_panic_hook",
+ "js-sys",
  "leptos",
  "shakmaty",
  "wasm-bindgen",

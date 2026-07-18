@@ -8,22 +8,49 @@ The frozen-replay bug is the motivating case. The reveal's replay read `ply` wit
 ply and froze, still captioned "Mate." Every native test passed: `judge`,
 `playback` and the pointer geometry were all correct. The fault was in the Leptos
 wiring, and only a browser runs that. See CLAUDE.md, "The browser is the only
-place some bugs exist".
+place some bugs exist". The reveal is now stepped by hand rather than by a timer,
+but the same class of bug lives in the step wiring, which is what this spec drives.
 
 ## What it checks
 
-- `reveal.spec.js` loads the app, confirms the board is a void with real piece
-  artwork in the roster, then picks the mate-in-2 on screen, reads its id, draws
-  **that puzzle's** recorded solution by dragging on the blank board, submits, and
-  asserts:
-  - the board reveals and the verdict says "Mate";
-  - the replay **lights more than one square** over its animation — the frozen
-    replay lit exactly one and stopped;
-  - the mating position actually shows pieces;
-  - the page logged no errors.
+`reveal.spec.js` holds three tests (the **Solve, step, and rate** one runs on two
+pinned puzzles):
 
-The solution comes from the committed `database/mate_in_2.jsonl`, read off disk, so
-the test cannot drift from what the app was built with.
+- **Blind board.** Loads the app and confirms the board is a void with real piece
+  artwork in the roster (no pieces on the board, no `board--revealed`).
+- **Solve, step, and rate.** The app serves one combined pool picked at random near
+  the user's rating, so the test overrides `Math.random` to a fixed seed and clears
+  the stored rating — pinning *exactly* which puzzle appears. This is run on two
+  seeds chosen against the committed database's rating order: a mate-in-3 whose line
+  includes a real promotion (so the picker's piece-choice is walked) and a mate-in-4
+  whose first move originates on the lowest rank (the endpoint the viewport size
+  exists to keep on-screen). Pinning matters because CI retries the whole test on failure — a
+  random puzzle would let a puzzle-specific bug pass on the retry against an unrelated
+  one. The test still reads *whichever* puzzle is on screen and looks up its recorded
+  solution, so it cannot drift from what the seed selects. For each pinned puzzle it
+  draws the solution by dragging on the blank board (choosing from the promotion popup
+  where a move promotes), submits, and asserts:
+  - the board reveals, the verdict says "Mate", and the mating square is lit;
+  - the rating moves and the `+n` delta shows it;
+  - stepping all the way back lands on the empty start (nothing lit) with pieces
+    still shown, and one step forward re-lights the first move — the manual reveal
+    actually moves, where the frozen replay would fail both halves;
+  - the page logged no errors.
+- **No-promotion exit.** Draws a move that matches promotion *geometry* but is not a
+  pawn's (a straight drag up one file into the top row, which the solver-oriented
+  board always makes a promotion-geometry move). Asserts the picker opens, that
+  Submit is disabled while it is open, and that the "Move without promoting" exit
+  keeps the arrow as a plain move — the ~14% of puzzles whose key is a non-pawn move
+  to the last rank depend on this.
+
+The solutions come from all four committed `database/mate_in_*.jsonl` files, read
+off disk, so the test cannot drift from what the app was built with.
+
+The Playwright viewport is sized (in `playwright.config.js`) to fit the whole board:
+a drag endpoint below the fold registers on no square, which would fail
+deterministically for any puzzle whose line reaches the lower ranks. Each dragging
+test asserts the board is within the viewport, so a layout change that regrows it
+fails loudly rather than resurfacing that bug.
 
 ## Running it
 

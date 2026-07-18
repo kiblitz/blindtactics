@@ -19,5 +19,6 @@ pub mod database;
 pub mod line;
 pub mod panel;
 pub mod pieces;
+pub mod rating;
 pub mod session;
 pub mod square;

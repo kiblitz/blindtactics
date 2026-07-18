@@ -364,10 +364,10 @@ fn playback_refuses_a_line_that_does_not_mate() {
 
 /// The reveal must show the puzzle the user was asked to solve.
 ///
-/// By linearity every defense ends in mate, so *any* of them animates a correct
+/// By linearity every defense ends in mate, so *any* of them replays as a correct
 /// line and this looks like a free choice. It is not. In
 /// [`common::DIVERGENT_DEFENSE`] one defense (`Kc2`) is mated an arrow early, so
-/// choosing it animates a two-move finish for a mate-in-3 — a correct line, and
+/// choosing it shows a two-move finish for a mate-in-3 — a correct line, and
 /// the wrong puzzle. The user, who solved it blind, is shown a board that never
 /// needed their third arrow.
 ///
@@ -386,7 +386,7 @@ fn playback_shows_the_full_depth_the_puzzle_advertises() {
     assert_eq!(
         solver_moves,
         line.len(),
-        "playback must animate all {} arrows, not stop at a defense that dies early",
+        "playback must step through all {} arrows, not stop at a defense that dies early",
         line.len()
     );
     assert!(steps.last().expect("non-empty").after.is_checkmate());

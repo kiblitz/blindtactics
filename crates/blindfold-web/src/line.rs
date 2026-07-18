@@ -11,7 +11,8 @@ use blindfold_core::mate;
 use blindfold_core::roster;
 use leptos::prelude::*;
 
-/// The drawn line, its promotion choices, and the submit controls.
+/// The drawn line, the submit controls, and — once solved — the controls that step
+/// through the reveal.
 ///
 /// Reads the line through `drawn` and reports edits through callbacks rather than
 /// mutating a shared vector, so the whole attempt lives behind one
@@ -20,15 +21,31 @@ use leptos::prelude::*;
 pub fn Line(
     #[prop(into)] drawn: Signal<Vec<arrow::Arrow>>,
     solver: shakmaty::Color,
-    depth: usize,
     #[prop(into)] solve: Signal<Option<session::Solve>>,
+    /// Whether the reveal can step toward the start / toward the mate — for
+    /// disabling the two navigation controls at the ends of the line.
+    #[prop(into)]
+    can_back: Signal<bool>,
+    #[prop(into)] can_forward: Signal<bool>,
+    /// Whether a promotion choice is open on the board. The submit controls are
+    /// inert while it is, so an unresolved move cannot be judged.
+    #[prop(into)]
+    choosing: Signal<bool>,
     #[prop(into)] on_undo: Callback<()>,
     #[prop(into)] on_clear: Callback<()>,
-    #[prop(into)] on_promote: Callback<(usize, shakmaty::Role)>,
     #[prop(into)] on_submit: Callback<()>,
     #[prop(into)] on_next: Callback<()>,
+    #[prop(into)] on_step_back: Callback<()>,
+    #[prop(into)] on_step_forward: Callback<()>,
 ) -> impl IntoView {
-    let solved = Signal::derive(move || matches!(solve.get(), Some(session::Solve::Solved(_))));
+    let solved =
+        Signal::derive(move || solve.with(|s| matches!(s, Some(session::Solve::Solved(_)))));
+
+    // The line-editing controls (Submit/Undo/Clear) are inert together: with no
+    // line there is nothing to act on, and while a promotion choice is open the
+    // move behind it is unresolved and must not be judged. One predicate so the
+    // three buttons cannot drift apart when that rule changes.
+    let editing_disabled = Signal::derive(move || drawn.get().is_empty() || choosing.get());
 
     view! {
         <section class="panel" aria-label="Your line">
@@ -46,16 +63,7 @@ pub fn Line(
                     line.into_iter()
                         .enumerate()
                         .map(|(i, a)| {
-                            view! {
-                                <Step
-                                    index=i
-                                    entry=a
-                                    drawn=drawn
-                                    solver=solver
-                                    locked=solved
-                                    on_promote=on_promote
-                                />
-                            }
+                            view! { <Step index=i entry=a solver=solver /> }
                         })
                         .collect_view()
                         .into_any()
@@ -65,8 +73,31 @@ pub fn Line(
             <div class="controls">
                 {move || {
                     if solved.get() {
+                        // Solved: walk the mating line back and forth, Lichess
+                        // analysis style, or move on.
                         view! {
-                            <button class="button button--primary" on:click=move |_| on_next.run(())>
+                            <div class="stepper" role="group" aria-label="Step through the mate">
+                                <button
+                                    class="button button--step"
+                                    aria-label="Step back"
+                                    disabled=move || !can_back.get()
+                                    on:click=move |_| on_step_back.run(())
+                                >
+                                    "◀"
+                                </button>
+                                <button
+                                    class="button button--step"
+                                    aria-label="Step forward"
+                                    disabled=move || !can_forward.get()
+                                    on:click=move |_| on_step_forward.run(())
+                                >
+                                    "▶"
+                                </button>
+                            </div>
+                            <button
+                                class="button button--primary"
+                                on:click=move |_| on_next.run(())
+                            >
                                 "Next puzzle"
                             </button>
                         }
@@ -75,21 +106,21 @@ pub fn Line(
                         view! {
                             <button
                                 class="button button--primary"
-                                disabled=move || drawn.get().is_empty()
+                                disabled=move || editing_disabled.get()
                                 on:click=move |_| on_submit.run(())
                             >
                                 "Submit"
                             </button>
                             <button
                                 class="button"
-                                disabled=move || drawn.get().is_empty()
+                                disabled=move || editing_disabled.get()
                                 on:click=move |_| on_undo.run(())
                             >
                                 "Undo"
                             </button>
                             <button
                                 class="button"
-                                disabled=move || drawn.get().is_empty()
+                                disabled=move || editing_disabled.get()
                                 on:click=move |_| on_clear.run(())
                             >
                                 "Clear"
@@ -100,70 +131,36 @@ pub fn Line(
                 }}
             </div>
 
-            <Verdict solve=solve depth=depth solver=solver />
+            <Verdict solve=solve solver=solver />
         </section>
     }
 }
 
-/// One numbered arrow, with a promotion picker where the drag *could* be a pawn
-/// promoting.
+/// One numbered arrow, showing its promotion piece if it has one.
 ///
-/// The picker's condition is [`arrow::Arrow::could_be_promotion`] — a pawn
-/// stepping off the rank below onto the last one, straight or one file sideways —
-/// not merely "lands on the last rank", which would put a picker beside both moves
-/// of a rook mate-in-2. It is a necessary condition read off the drag alone.
-/// Promotion is mandatory rather than optional, so there is no "promote, or don't"
-/// to ask: only "to what". Whether the piece on `from` really is a pawn is
-/// something the user knows from the roster and the app deliberately does not tell
-/// them, so the choice is left unset rather than guessed at.
+/// The picker itself lives on the board now, popped up at the destination the
+/// moment a promotion-candidate drag lands ([`crate::board::Board`]). Here the
+/// chosen piece is only shown, not chosen — so the list reads back the whole line
+/// including "…and it promotes to a queen".
 #[component]
-fn Step(
-    index: usize,
-    entry: arrow::Arrow,
-    #[prop(into)] drawn: Signal<Vec<arrow::Arrow>>,
-    solver: shakmaty::Color,
-    #[prop(into)] locked: Signal<bool>,
-    #[prop(into)] on_promote: Callback<(usize, shakmaty::Role)>,
-) -> impl IntoView {
-    let promotes = entry.could_be_promotion(solver);
-
+fn Step(index: usize, entry: arrow::Arrow, solver: shakmaty::Color) -> impl IntoView {
     view! {
         <li class="line__step">
             <span class="line__number">{index + 1}</span>
             <span class="line__move mono">
                 {entry.from.to_string()} <span class="line__arrow">"→"</span> {entry.to.to_string()}
             </span>
-            {promotes
-                .then(|| {
+            {entry
+                .promotion
+                .map(|role| {
                     view! {
-                        <span class="promotion" role="group" aria-label="Promote to">
-                            {blindfold_core::constants::PROMOTABLE
-                                .into_iter()
-                                .map(|role| {
-                                    view! {
-                                        <button
-                                            class="promotion__choice"
-                                            class:promotion__choice--on=move || {
-                                                drawn
-                                                    .get()
-                                                    .get(index)
-                                                    .and_then(|a| a.promotion)
-                                                    == Some(role)
-                                            }
-                                            disabled=locked
-                                            aria-label=roster::name(role, false)
-                                            title=roster::name(role, false)
-                                            // Tapping the chosen role again clears it (handled in
-                                            // `Attempt::toggle_promotion`), so a misread of the
-                                            // roster is one tap to undo rather than a cleared line.
-                                            on:click=move |_| on_promote.run((index, role))
-                                        >
-                                            <span inner_html=pieces::svg(solver, role) />
-                                        </button>
-                                    }
-                                })
-                                .collect_view()}
-                        </span>
+                        <span
+                            class="line__promotion"
+                            role="img"
+                            aria-label=format!("promotes to {}", roster::name(role, false))
+                            title=roster::name(role, false)
+                            inner_html=pieces::svg(solver, role)
+                        />
                     }
                 })}
         </li>
@@ -174,7 +171,6 @@ fn Step(
 #[component]
 fn Verdict(
     #[prop(into)] solve: Signal<Option<session::Solve>>,
-    depth: usize,
     solver: shakmaty::Color,
 ) -> impl IntoView {
     view! {
@@ -193,7 +189,7 @@ fn Verdict(
                     Some(session::Solve::Refuted { defense, reason }) => {
                         view! {
                             <span class="verdict--no">
-                                {session::explain(&reason, depth, solver)}
+                                {session::explain(&reason, solver)}
                                 {(!defense.is_empty())
                                     .then(|| {
                                         let moves = defense
@@ -238,23 +234,6 @@ fn Verdict(
                     }
                 }
             }}
-        </p>
-    }
-}
-
-/// A hint about what to draw, under the board.
-///
-/// Just the count and the "your moves only" rule. The file/rank labels live in
-/// [`crate::board::Coordinates`], rendered into the edge squares so they cannot
-/// drift out of alignment with the grid — this is not where coordinates are.
-#[component]
-pub fn Hint(depth: usize) -> impl IntoView {
-    view! {
-        <p class="hint">
-            {format!(
-                "Draw {depth} arrow{} — your moves only, in order.",
-                if depth == 1 { "" } else { "s" },
-            )}
         </p>
     }
 }

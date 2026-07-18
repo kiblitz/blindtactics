@@ -21,8 +21,19 @@ shakmaty.workspace = true
 # indistinguishable from a browser bug. Cheap enough to keep in release.
 console_error_panic_hook = "0.1"
 
-# Used by `board.rs` to read the board's own box on each pointer event. Both are
-# re-exported by leptos, but named here so the versions are ours to pin rather
-# than whatever a transitive bump hands us.
+# Used by `board.rs` to read the board's own box on each pointer event, and by
+# `rating.rs` to persist the user's Elo in `localStorage`. Both are re-exported by
+# leptos, but named here so the versions are ours to pin rather than whatever a
+# transitive bump hands us.
 wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["DomRect", "Element", "PointerEvent"] }
+web-sys = { version = "0.3", features = [
+    "DomRect",
+    "Element",
+    "PointerEvent",
+    "Storage",
+    "Window",
+] }
+
+# `Math::random` for picking the next puzzle. Transitively present via leptos;
+# named here for the same reason as `web-sys`.
+js-sys = "0.3"
