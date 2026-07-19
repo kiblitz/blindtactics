@@ -183,6 +183,16 @@ re-measure, do not quote it.
   `fmt --check`, clippy (native and wasm, `-D warnings`), and `cargo test --workspace`;
   an `e2e` job installs trunk and Playwright's chromium, builds the release bundle, and
   runs the browser reveal test. Both must be green.
+- Deploy — `.github/workflows/deploy.yml`, on every push to `main` (and manual
+  `workflow_dispatch`). Builds `crates/blindfold-web` with `trunk build --release` and
+  force-pushes `dist/` to the `deploy` branch, which Netlify serves. Modelled on the
+  sibling `language-notes` project's pipeline; the build half reuses `ci.yml`'s known-good
+  trunk-install steps. **Deliberately ungated** — it does not wait on the `check`/`e2e`
+  jobs (lower scrutiny, per the working agreement above), so a push that compiles ships
+  even if a test would fail. `Trunk.toml`'s `public_url = "./"` makes the bundle's asset
+  paths relative, so it serves from Netlify's domain root with no `--public-url`. Serving
+  is a one-time Netlify dashboard step (site → `deploy` branch, empty build command, root
+  publish dir); the workflow only maintains the branch.
 
 **`blindfold-curate` has both a lib and a bin target.** The lib is not there for
 reuse — nothing else links it — it exists so `tests/` can reach `constants`, `select`,
@@ -825,6 +835,16 @@ tight tier, and ~11k usable puzzles against a target of ~100 is ample.
 
 ## Working agreements with the user
 
+- **Commit straight to `main`. (Strongholded 2026-07-18.)** The user holds this project
+  at deliberately lower scrutiny than their others, and this **overrides the global
+  `~/.claude/CLAUDE.md` workflow** for this repo: no feature branch, no PR, no mandatory
+  11-agent review ceremony before pushing. Still run the basics before a push — `cargo
+  fmt`, clippy, `cargo test --workspace` — but push the result directly to `main`. Reach
+  for a branch/PR only when the user explicitly asks for one. (The prior work landed on
+  `main` by fast-forwarding the `claude/puzzle-mode-and-elo` branch; PR #2 is its record.)
+- **Deploy is automatic on every push to `main`.** `.github/workflows/deploy.yml` builds
+  the static site and force-pushes `dist/` to the `deploy` branch; Netlify serves that
+  branch. So a `main` push both ships the code and redeploys — see the CI bullet below.
 - The user cares about code quality and readability over shipping hacks.
 - The user wants notes committed here whenever a decision is "strongholded" so they
   never have to repeat themselves.

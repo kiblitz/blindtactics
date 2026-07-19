@@ -1,0 +1,68 @@
+name: Deploy to Netlify
+
+# Same shape as the sibling `language-notes` project: build the static site on a
+# push to `main`, then force-push the built `dist/` to a `deploy` branch. Netlify
+# is pointed at that branch in its dashboard and serves whatever lands there, so
+# the source branch stays clean of build artifacts and Netlify never has to run a
+# wasm toolchain of its own.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time; a newer push supersedes an in-flight one.
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+# NOTE: this workflow only produces the `deploy` branch. Serving it is a one-time
+# Netlify dashboard step: point a site at the `deploy` branch with an empty build
+# command and the repo root as the publish directory. See README / the PR notes.
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    # Scoped to the job (tighter than workflow-wide): the deploy step force-pushes
+    # the `deploy` branch, which needs write access to the repo.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same toolchain install the CI jobs use: rust-toolchain.toml pins the
+      # channel (1.97) and rustfmt/clippy, but `rustup show` stopped installing the
+      # toolchain in rustup 1.28, and this job also needs the wasm target.
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The prebuilt binary rather than `cargo install trunk` (which recompiles it
+      # from source every run). Pinned to the version CI builds with; trunk fetches
+      # wasm-bindgen and wasm-opt itself on first build.
+      - name: Install trunk
+        run: |
+          curl -fsSL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xzf - -C "$HOME/.cargo/bin"
+
+      # Trunk.toml sets public_url = "./", so the bundle's asset links are relative
+      # and serve correctly at Netlify's domain root. Output lands in
+      # crates/blindfold-web/dist.
+      - name: Build site
+        working-directory: crates/blindfold-web
+        run: trunk build --release
+
+      # Publish the built bundle to the `deploy` branch, mirroring language-notes:
+      # a throwaway repo rooted at dist/, force-pushed so `deploy` always holds
+      # exactly the current build and nothing else.
+      - name: Deploy to deploy branch
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          cd crates/blindfold-web/dist
+          git init
+          git checkout -b deploy
+          git add -A
+          git -c user.name="github-actions" -c user.email="github-actions@github.com" \
+            commit -m "deploy ${SHA}"
+          git push --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" deploy:deploy
