@@ -15,7 +15,7 @@ jobs:
     name: fmt · clippy · test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # rust-toolchain.toml pins the channel (1.97), the wasm target, and the
       # rustfmt/clippy components. `rustup show` stopped installing the toolchain
@@ -46,7 +46,7 @@ jobs:
     name: browser reveal test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # As in the check job: rustup 1.28 no longer installs the pinned toolchain
       # via `rustup show`. This job only builds wasm, so it needs the wasm target.
@@ -65,7 +65,7 @@ jobs:
           curl -fsSL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
             | tar -xzf - -C "$HOME/.cargo/bin"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -93,7 +93,7 @@ jobs:
 
       - name: Upload report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: crates/blindfold-web/playwright-report/

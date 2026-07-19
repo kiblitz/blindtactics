@@ -34,7 +34,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The same toolchain install the CI jobs use: rust-toolchain.toml pins the
       # channel (1.97) and rustfmt/clippy, but `rustup show` stopped installing the
@@ -63,10 +63,10 @@ jobs:
 
       # Package dist/ as a Pages artifact and hand it to the Pages deployment.
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: crates/blindfold-web/dist
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
