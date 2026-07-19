@@ -154,12 +154,13 @@ blindfold-chess-trainer/
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 68 tests (+ 7 Playwright tests across two projects, run as
-  8 cases — the reveal test runs on two pinned puzzles, and a `mobile` project runs a
+- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 9 cases —
+  the reveal test runs on two pinned puzzles, and a `mobile` project runs a
   touch spec on a phone viewport), clippy clean. Blank board,
   drag-drawn numbered arrows each in its own colour, roster panel with real piece
-  artwork, a per-move promotion control, a hover highlight, a board flip and a
-  settings menu whose one setting is the point of view (to move / white / black),
+  artwork (and a speak button), a per-move promotion control, a hover highlight, a board
+  flip and a settings menu (point of view, plus voice mode's input/output modes and a
+  silence-timeout stepper), a record button for spoken input,
   submit, a **give-up** button (reveals the stored solution, scored as a loss), and a
   static reveal stepped through by hand — ◀/▶ **or** the arrow keys **or** clicking a
   move in the post-tactic **SAN move list** (Lichess-analysis style — no timer, no
@@ -309,34 +310,46 @@ its only consumer. That is the line; it is not "no strings in core".
   `localStorage`. The arithmetic is pure and native-tested; only the storage I/O needs
   a browser, and it is the only thing here that touches one.
 - `settings` — the persisted preferences, each under its own `localStorage` key so they
-  move independently. Two now: `Pov` (`ToMove` / `White` / `Black`), which side faces the
-  user, via `load_pov`/`save_pov`; and the read-aloud flag, via `load_sound`/`save_sound`
-  (off by default — audio is opt-in). `Pov::side(solver)` resolves it against who is to
-  move, and `facing(pov, solver, flipped)` layers the transient per-puzzle flip on top —
-  both pure and native-tested (the flip's *sign* especially, the same care `square` takes);
-  only the `load_*`/`save_*` pairs touch storage. `facing`, not `orientation`, so the call
-  site reads `square::Orientation(settings::facing(..))` rather than repeating the word. See
-  "Which way the board faces" below.
+  move independently. Four now: `Pov` (`ToMove` / `White` / `Black`), which side faces the
+  user, via `load_pov`/`save_pov`; `Input` (`Physical` / `Audio` — "Draw" / "Speak"), how
+  moves are entered, via `load_input`/`save_input`; `Output` (`Visual` / `Audio` — "Show" /
+  "Read aloud"), whether the roster and verdict are read aloud *automatically*, via
+  `load_output`/`save_output`; and the silence timeout (seconds) via `load_silence`/
+  `save_silence` (`clamp_silence` bounds it). All default off/visual/draw — voice is opt-in.
+  The pure helpers are `Pov::side` / `facing` (orientation), `Input::arms_next(last_on)`
+  (the per-puzzle mic policy — Draw always resets to off, Audio carries the last state) and
+  `Output::speaks()` (whether to auto-read); all native-tested, only the `load_*`/`save_*`
+  pairs touch storage. `facing`, not `orientation`, so the call site reads
+  `square::Orientation(settings::facing(..))` rather than repeating the word. See "Which way
+  the board faces" and "Voice mode" below.
 - `speech` — the read-aloud output: a thin wrapper over the browser's `speechSynthesis`
   (`say(text)` / `silence()`). No logic with a right answer — *what* to say is built in
-  core (`roster::text`) and `session` (`spoken`); this only hands a finished string to the
-  browser, and degrades to silence where there is no voice. The one module here that is
-  browser-only by nature, like `storage`.
+  core (`roster::speech`) and `session` (`spoken`); this only hands a finished string to the
+  browser, and degrades to silence where there is no voice. It is also the **single choke
+  point that deafens the mic while the app speaks**: `say` calls `recognition::pause` before
+  speaking and resumes on the utterance's `end` (guarded so a rapid re-`say` does not
+  un-deafen between two utterances). Browser-only by nature, like `storage`.
 - `recognition` — the read-aloud output's mirror: speech *input*, a thin `inline_js` wrapper
-  over `webkitSpeechRecognition` (`is_supported()` / `start(on_transcript)` / `stop()`). No
-  logic with a right answer — *what a transcript means* is `session::interpret`; this only
-  starts and stops the recogniser and forwards each final transcript. Browser-only by
+  over `webkitSpeechRecognition` (`is_supported()` / `start(on_transcript)` / `stop()` /
+  `pause()` / `resume()`). **Interim results are on**, so `on_transcript(transcript,
+  is_final)` fires as the user is still speaking (streaming) and again when the phrase
+  settles. No logic with a right answer — *what a transcript means* is `session::interpret`;
+  this only starts/stops/pauses the recogniser and forwards each transcript. Browser-only by
   nature, and degrades to "unsupported" where there is no recognition. See "Voice input".
 - `storage` — the one `localStorage` seam (`read(key)` / `write(key, value)`), shared by
   `rating` and `settings` so the fallible steps to reach it — and the `get_item`/`set_item`
   that can itself fail — are not open-coded twice. The `window().local_storage()` handle is
   private to the module; callers deal only in a key and an `Option<String>`.
 - `database` — the committed JSONL, `include_str!`d.
-- `board`, `panel`, `line`, `app` — components. Markup and event plumbing only. `line`
-  swaps its drawn-arrow list for the SAN `Movelist` once revealed; `app` holds the
-  window `keydown` listener that maps the arrow keys onto the reveal cursor, the two
-  announcement effects (read the roster on a new puzzle, speak the verdict on a solve),
-  and the read-aloud toggle in `BoardBar`.
+- `board`, `panel`, `line`, `app` — components. Markup and event plumbing only. `board`
+  takes a `preview` prop (a ghost arrow streamed from speech as the user speaks); `panel`
+  (the roster) carries an always-present speak button; `line` swaps its drawn-arrow list
+  for the SAN `Movelist` once revealed and holds the record button + silence countdown;
+  `app` holds the window `keydown` listener that maps the arrow keys onto the reveal
+  cursor, the two announcement effects (auto-read the roster on a new puzzle and the
+  verdict on a solve, gated on `Output::speaks`), the per-puzzle mic effect (arms the mic
+  from `Input::arms_next`), the settings menu (POV / input / output / silence stepper), and
+  the record control's toggle/countdown/streaming wiring.
 - `pieces` — Cburnett's artwork, taken from lila (GPLv2-or-later, so compatible with our
   GPL-3.0-or-later), compiled in. See `assets/pieces/README.md`.
 - `constants` — interface policy: board side, arrow geometry, Elo constants, selection
@@ -570,7 +583,10 @@ and the one column is ordered roster → board → line via `order`:
 The board's **view controls (flip, settings) live in the header row** (`.topbar`), not in
 a bar above the board. `.topbar` is a flex row holding `RatingBar` (`flex: 1`, so it fills
 and pushes the controls right) and `BoardBar`; on both desktop and mobile it reads `Rating
-1200 … 400 puzzles ⇅ ⚙`. This exists for the phone: a separate control bar above the board
+1200 ⇅ ⚙` (the puzzle count that used to sit here was noise and is gone; the mic and
+read-aloud toggles that used to live in `BoardBar` moved out — the mic to a record button
+in the line panel, read-aloud to an `Output` mode in the settings menu). This exists for
+the phone: a separate control bar above the board
 was another ~40px row the board wanted. Desktop simply shares the consolidation — the board
 gets a cleaner top edge. `BoardBar` is therefore rendered as a sibling of `RatingBar` in
 `app.rs`, out of `.layout__board`.
@@ -608,30 +624,34 @@ touch the device. It divides cleanly into two halves with very different risk pr
 
 **Sound output (built).** Text-to-speech via the browser's `speechSynthesis`, wrapped in
 `speech.rs` (`say`/`silence`). It works on every browser including iOS Safari and Android
-Chrome, works offline (OS voices), and needs no permission. The read-aloud toggle is a
-speaker button in the header row (`BoardBar`), persisted (`settings::load_sound`), off by
-default. When on:
+Chrome, works offline (OS voices), and needs no permission. Two ways to trigger it: the
+**`Output` mode** (`Show` / `Read aloud`, in the settings menu, `settings::load_output`, off
+by default) governs *automatic* reading, and the roster panel's **speak button** reads it on
+demand regardless of the mode — the setting is "talk on its own", not "talk at all". When
+auto-reading is on (or the speak button is pressed):
 
-- A new puzzle is read aloud — `roster::speech()`, the **third** rendering the data model
-  was built for (alongside `text` and SVG). It is *not* `text()`: a speech engine reads a
-  bare file letter as a word, so "a2" comes out "ah two" (the article "a"). `speech()`
-  spells the file as its letter *name* — `square_spoken(b7)` → `"bee 7"` — while `text()`
-  keeps plain "a2" for display and screen readers (which spell coordinates themselves and
-  would choke on the spelled-out form). The two share one `render(square: fn)` so they can
-  only differ in the square spelling, never the words. Pinned by `tests/roster.rs`'s
-  `every_file_is_spelled_out` and `speech_spells_files_as_letter_names`.
-  - **Every file is spelled as its initial** — `"A."` … `"H."`, not as words. This was
-    settled empirically with a TTS→STT loop (`edge-tts` neural voices → `faster-whisper`;
-    throwaway scripts, not committed): word spellings misfire two ways — a bare vowel is
-    read as a *word* ("a2" → "ah two"; "ay" → `/aɪ/` "eye"), and a held-vowel spelling like
-    `"ee"` is stretched/doubled on some voices ("ee 3" → "e-e three"). The initial form
-    (`"A."` → "ay", `"E."` → "ee") drops the engine into crisp letter-name reading on all
-    three voices tested. `b`–`h` sound identical to their old word spellings; `a` and `e`
-    are the ones it rescues. See `roster::file_spoken`. **The loop is a reusable tool**: to
-    re-check a spelling, `pip install edge-tts faster-whisper`, synthesize the phrase, and
-    transcribe — a recognizer "hearing" the wrong letter is the bug reproduced. It is a
-    Microsoft-neural proxy, not Apple's exact letter-to-sound, but it reproduced the real
-    `ay`→"eye" bug, so it tracks.
+- The roster is read aloud — `roster::speech()`, the **third** rendering the data model was
+  built for (alongside `text` and SVG). It is *not* `text()`: a speech engine reads a bare
+  lower-case file letter as the article, so "a2" comes out "ah two". `speech()` upper-cases
+  the coordinate — `square_spoken(b7)` → `"B7"`, read "bee seven" — while `text()` keeps
+  plain "a2" for display and screen readers (which spell coordinates themselves). The two
+  share one `render(square: fn)` so they can only differ in the square spelling, never the
+  words. Pinned by `tests/roster.rs`'s `every_file_is_spelled_out` and
+  `speech_spells_files_as_letter_names`.
+  - **The square is the upper-cased coordinate, glued** — `"A2"`, `"E3"`, `"G7"`, not an
+    initial with a full stop. This reverses an earlier decision, on a re-measurement with
+    the TTS→STT loop (`edge-tts` neural → `faster-whisper`; throwaway scripts, not
+    committed). The old form spelled each file as `"A."` … `"H."` to force letter-name
+    reading, but the full stop is a *sentence break*: it split "a2" into "ay … two" with a
+    long pause (the "too much separation" the user reported), and on the loop the a-file's
+    period form was mis-voiced badly enough to be heard as "eight three". The glued
+    upper-case coordinate is heard cleanly as one tight "letter name + number" across voices,
+    with no gap — upper-casing gives the cell-reference reading ("ay two"), gluing removes
+    the pause. **The loop is a reusable tool**: `pip install edge-tts faster-whisper`,
+    synthesize the phrase, transcribe, and compare — a recognizer "hearing" the wrong letter
+    (or a measurable inter-token gap) is the bug reproduced. It is a Microsoft-neural proxy,
+    not Apple's exact letter-to-sound, but it reproduced both the original `ay`→"eye" bug and
+    this separation one, so it tracks.
   - **The voice prefers male**, as the calmer/"more zen" read (the user's call). The API
     exposes no gender, so `voice_score` infers it from the name (known male personas, or an
     explicit "male" — guarded against "female", which contains it). The bonus is under a
@@ -673,14 +693,25 @@ default. When on:
 
 Two `Effect`s in `app` do the announcing: one subscribes to `position` (fires on load and
 every `next`), one to `solve` (fires when a verdict appears, not on a reveal step). Both
-read `sound` **untracked** so toggling it does not replay anything — the toggle owns the
-"just enabled, read the current puzzle" case, and it must, because **browsers require a
-user gesture before speaking**: the enabling click is that gesture. A page that tried to
-talk on load (sound persisted-on from a prior session) is refused and degrades to silence
-until the first interaction — acceptable, and the reason audio is opt-in rather than
-default. Guarded by `reveal.spec.js`'s read-aloud test (toggle flips, persists across a
-reload, speaking raises no page error — headless chromium's `speechSynthesis` has no voices
-so `speak()` is a silent no-op, which is exactly enough to prove the wiring never throws).
+read `output` **untracked** so switching the mode does not replay anything — **selecting a
+setting actuates nothing**, and it must not, because **browsers require a user gesture before
+speaking**: the manual speak button (or the mic tap) is that gesture. A page that tried to
+talk on load (output persisted to `Read aloud` from a prior session) is refused and degrades
+to silence until the first interaction — acceptable, and the reason audio is opt-in. Guarded
+by `reveal.spec.js`'s output-mode test (the mode persists across a reload like the POV, and
+the roster speak button raises no page error — headless chromium's `speechSynthesis` has no
+voices so `speak()` is a silent no-op, which is exactly enough to prove the wiring never
+throws).
+
+The **record button, per-puzzle mic policy, silence countdown, and streaming** are the app's
+other voice wiring. The record button (in the line panel — bright red "Listening" when armed)
+toggles the mic and records the user's *intent* (`mic_desired`); a per-puzzle `Effect`
+re-arms from `Input::arms_next(mic_desired)` on each new puzzle — `Draw` resets to off, `Speak`
+carries the last state. While listening, a countdown (`silence_secs`, a stepper setting) runs
+on a 1-second interval, reset by every heard phrase; at zero it turns the mic off — but does
+*not* touch `mic_desired`, so a silence timeout in `Speak` mode still re-arms next puzzle
+(only the user pressing the button counts as intent). Interim transcripts stream a `preview`
+ghost arrow onto the board; a final transcript commits it.
 
 **Voice input — built.** Speech recognition (`webkitSpeechRecognition`) → spoken move →
 arrow. The hard, bug-prone half, so its brain lives in pure, heavily tested modules
@@ -737,30 +768,32 @@ The browser half (built):
   (Chrome streams audio to Google), and a **gesture to start**. `is_supported()` gates the
   mic control so it is simply absent where recognition is not — including headless CI
   chromium, which has no recognition service. Degrades to nothing like `speech` does.
-- **The echo guard.** With the mic on, the recogniser hears the app's own read-aloud
-  (a confirmation, a question, the roster, the verdict) and would re-parse it as a move —
-  a feedback loop that draws a spurious arrow. `speech::say` therefore calls
-  `recognition::suppress(ms)` for the utterance's estimated duration
-  (`SPEECH_ECHO_MS_PER_CHAR * len + SPEECH_ECHO_BUFFER_MS`), and the recogniser drops any
-  transcript finalised inside that window. Centralising it in `say` — the single choke
-  point for *all* TTS — covers every echo source at once, and it is safe against
-  over-suppression because the flow is turn-based: the user waits for the app to finish
-  speaking, so no real input falls in the window. The tail buffer exists because the
-  recogniser finalises a heard phrase slightly *after* the audio ends, so the window must
-  outlast the utterance. A no-op when the mic is off. **Not e2e-testable** for the same
-  reason the rest of the flow is not (no recognition service in headless chromium).
-- `app` wiring: a mic button in `BoardBar` (shown only when supported) toggles listening;
-  enabling reads the roster aloud (that tap is the gesture browsers demand before speech).
-  Each final transcript goes to `interpret`, and the result drives the **same action
-  closures the buttons use** — `submit`/`undo`/`clear`/`next`/`give_up` and `draw` — so the
-  voice and pointer paths cannot diverge. Voice confirmations/questions speak through
-  `speech` **directly, not gated on the read-aloud `sound` toggle**: voice mode needs its
-  own feedback, and the enabling tap is the required gesture. Submit still runs the same
-  `judge`, so the assembled arrows are verified against *all* defenses exactly as drawn
-  ones are. **The browser flow itself is not e2e-tested** — headless chromium has no speech
-  recognition, so there is no way to feed it audio; the existing suite does prove the
-  `inline_js` module loads and `is_supported()` runs without error on page load, and the
-  decision logic is covered natively by `interpret`.
+- **The echo guard — deafen, don't just ignore.** With the mic on, the recogniser hears the
+  app's own read-aloud (a confirmation, a question, the roster, the verdict) and would
+  re-parse it as a move — a feedback loop that draws a spurious arrow. `speech::say`
+  therefore **pauses the recogniser** (`recognition::pause`) before speaking and resumes it
+  (`recognition::resume`) on the utterance's `end`/`error`. Genuinely stopping it — not
+  dropping transcripts inside an estimated time window, the old approach — is the robust
+  version: nothing is heard to mishear, and there is no duration to estimate. Centralising it
+  in `say` (the single choke point for *all* TTS) covers every echo source at once. Two
+  subtleties: `cancel()` runs *before* `pause()`, so a cancelled utterance's late `end` sees
+  the new one speaking and does not un-deafen mid-sentence; and `resume` is guarded on
+  `!speaking() && !pending()`, so a rapid re-`say` (roster then verdict) does not un-deafen
+  between the two. Safe against over-pausing because the flow is turn-based (the user waits
+  for the app to finish). A no-op when the mic is off. **Not e2e-testable** (no recognition
+  service in headless chromium).
+- `app` wiring: the record button (in the line panel, shown only when supported) toggles
+  listening; arming reads the roster aloud (that tap is the gesture browsers demand before
+  speech). Each transcript goes to `interpret`; a **final** result drives the **same action
+  closures the buttons use** — `submit`/`undo`/`clear`/`next`/`give_up` and `draw` — while an
+  **interim** result only streams a `preview` ghost arrow (so a half-said "sub…" cannot fire
+  submit). Voice confirmations/questions speak through `speech` **directly, not gated on the
+  `Output` mode**: voice mode needs its own feedback, and the arming tap is the required
+  gesture. Submit still runs the same `judge`, so the assembled arrows are verified against
+  *all* defenses exactly as drawn ones are. **The browser flow itself is not e2e-tested** —
+  headless chromium has no speech recognition, so there is no way to feed it audio; the
+  existing suite does prove the `inline_js` module loads and `is_supported()` runs without
+  error on page load, and the decision logic is covered natively by `interpret`.
 
 ### Arrows are coloured per move, and duplicates fan apart
 
