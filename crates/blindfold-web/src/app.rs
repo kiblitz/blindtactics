@@ -266,6 +266,11 @@ pub fn App() -> impl IntoView {
         let heard = puzzle.with_untracked(|p| {
             attempt.with_untracked(|a| session::interpret(&transcript, p, a.arrows()))
         });
+        // Log the raw transcript and what it resolved to. Voice input is the most
+        // bug-prone part of the app and cannot be e2e-tested (no recognition in headless
+        // chromium), so a console trail of exactly what the browser heard is the only way
+        // to diagnose a mishear like "knight f7" → "I did not catch that".
+        leptos::logging::log!("voice: heard {transcript:?} final={is_final} -> {heard:?}");
         match heard {
             // Stream the provisional move onto the board while the user is still
             // speaking (interim), and commit it only when the phrase settles (final).
