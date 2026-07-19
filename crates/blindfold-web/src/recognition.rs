@@ -53,9 +53,16 @@ function bft_make() {
   if (!Recognition) return null;
   const recognition = new Recognition();
   recognition.lang = "en-US";
-  recognition.continuous = true;
-  // Interim results stream the move to the board as the user speaks; the caller commits
-  // only on a final result.
+  // continuous = false, deliberately. With continuous = true Chrome batches several
+  // spoken phrases into one result and only finalises the whole batch after a long
+  // silence — so a single move arrives as an endless stream of *interims* that never
+  // commit, and the one late final is a concatenation ("Queen G6 Queen G5") that the
+  // one-move parser reads as a single garbled move. False makes Chrome finalise at each
+  // natural pause: one move, one final. `onend` restarts it (below), so the user can
+  // still speak a whole line move by move, hands-free.
+  recognition.continuous = false;
+  // Interim results stream the move to the board as a preview while the user is still
+  // speaking; the caller commits only on the final — which, now, is one per move.
   recognition.interimResults = true;
   recognition.onresult = (event) => {
     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -63,9 +70,10 @@ function bft_make() {
       if (_onTranscript) _onTranscript(result[0].transcript, result.isFinal);
     }
   };
-  // The recogniser stops itself after a pause. While we still want to listen and are
-  // not deliberately paused (for the app's own speech), start it again so the session
-  // stays hands-free rather than dying at the first silence.
+  // The recogniser stops after each phrase (continuous = false) or a pause. While we
+  // still want to listen and are not deliberately paused (for the app's own speech),
+  // start it again — so one session spans a whole line of moves and rides out the pauses
+  // between them, staying hands-free rather than dying at the first one.
   recognition.onend = () => {
     if (_recognition === recognition) {
       _recognition = null;

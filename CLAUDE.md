@@ -333,9 +333,17 @@ its only consumer. That is the line; it is not "no strings in core".
   over `webkitSpeechRecognition` (`is_supported()` / `start(on_transcript)` / `stop()` /
   `pause()` / `resume()`). **Interim results are on**, so `on_transcript(transcript,
   is_final)` fires as the user is still speaking (streaming) and again when the phrase
-  settles. No logic with a right answer — *what a transcript means* is `session::interpret`;
-  this only starts/stops/pauses the recogniser and forwards each transcript. Browser-only by
-  nature, and degrades to "unsupported" where there is no recognition. See "Voice input".
+  settles. **`continuous` is off, and that is load-bearing:** with `continuous = true` Chrome
+  batches several spoken phrases into one result and finalises the whole batch only after a
+  long silence — so a single move arrives as endless interims that never commit (the app draws
+  on the *final*), and the one late final is a concatenation like `"Queen G6 Queen G5"` that
+  the one-move parser mangles into a garbled from/to. `false` finalises each phrase at its
+  natural pause (one move, one final); `onend` restarts the recogniser so a session still spans
+  a whole line, move by move. This was a real reported bug (`#6npPh`, and see the console-log
+  trail `voice: heard …`). No logic with a right answer — *what a transcript means* is
+  `session::interpret`; this only starts/stops/pauses the recogniser and forwards each
+  transcript. Browser-only by nature, and degrades to "unsupported" where there is no
+  recognition. See "Voice input".
 - `storage` — the one `localStorage` seam (`read(key)` / `write(key, value)`), shared by
   `rating` and `settings` so the fallible steps to reach it — and the `get_item`/`set_item`
   that can itself fail — are not open-coded twice. The `window().local_storage()` handle is
