@@ -409,15 +409,26 @@ const ASK_CASTLE_SIDE: &str = "Which side? Kingside or queenside.";
 /// intended mate; a dual that diverges from the stored line can misresolve, and then
 /// falls out as [`Heard::Say`] asking them to try again rather than a wrong arrow.
 pub fn interpret(transcript: &str, puzzle: &puzzle::Puzzle, arrows: &[arrow::Arrow]) -> Heard {
-    let intent = diction::parse(transcript);
+    resolve_spoken(&diction::parse(transcript), puzzle, arrows)
+}
+
+/// Resolve one already-parsed [`diction::Intent`] against the puzzle and the moves drawn
+/// so far — the per-move core of [`interpret`], exposed so the streaming multi-move path
+/// (see [`crate::app`]) can resolve each move of a spoken line in turn, against the
+/// position that move is made from as the line grows.
+pub fn resolve_spoken(
+    intent: &diction::Intent,
+    puzzle: &puzzle::Puzzle,
+    arrows: &[arrow::Arrow],
+) -> Heard {
     match intent {
-        diction::Intent::Command(command) => Heard::Command(command),
+        diction::Intent::Command(command) => Heard::Command(*command),
         diction::Intent::Unclear => Heard::Say(DIDNT_CATCH.to_owned()),
         diction::Intent::Move(_) | diction::Intent::Castle(_) => {
             let Some(pos) = voice_position(puzzle, arrows.len()) else {
                 return Heard::Say(LINE_COMPLETE.to_owned());
             };
-            match diction::resolve(&intent, &pos).expect("a move or castle resolves") {
+            match diction::resolve(intent, &pos).expect("a move or castle resolves") {
                 diction::Resolution::Move(arrow) => Heard::Draw { arrow },
                 diction::Resolution::Ambiguous(squares) => Heard::Say(ask_which(&squares)),
                 diction::Resolution::NeedsPromotion(_) => Heard::Say(ASK_PROMOTION.to_owned()),

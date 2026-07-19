@@ -53,27 +53,31 @@ function bft_make() {
   if (!Recognition) return null;
   const recognition = new Recognition();
   recognition.lang = "en-US";
-  // continuous = false, deliberately. With continuous = true Chrome batches several
-  // spoken phrases into one result and only finalises the whole batch after a long
-  // silence — so a single move arrives as an endless stream of *interims* that never
-  // commit, and the one late final is a concatenation ("Queen G6 Queen G5") that the
-  // one-move parser reads as a single garbled move. False makes Chrome finalise at each
-  // natural pause: one move, one final. `onend` restarts it (below), so the user can
-  // still speak a whole line move by move, hands-free.
-  recognition.continuous = false;
-  // Interim results stream the move to the board as a preview while the user is still
-  // speaking; the caller commits only on the final — which, now, is one per move.
+  // continuous = true: the user is not made to pause between moves. Chrome then batches a
+  // whole spoken line into its results and finalises late, so we forward the *entire*
+  // accumulated transcript on every event (below) and let the Rust side segment it into
+  // moves and stream them — see `diction::parse_line` and `app::handle_voice`.
+  recognition.continuous = true;
+  // Interim results let the board preview a move as it is spoken and let earlier moves in
+  // a line commit before the line is finished.
   recognition.interimResults = true;
+  // Forward the full transcript so far — every result concatenated — not just the newest
+  // slice. The parser wants the whole line ("queen f5 queen g6") to segment it; is_final
+  // is true only once *every* result has settled, i.e. the whole utterance is done.
   recognition.onresult = (event) => {
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const result = event.results[i];
-      if (_onTranscript) _onTranscript(result[0].transcript, result.isFinal);
+    if (!_onTranscript) return;
+    let full = "";
+    let allFinal = true;
+    for (let i = 0; i < event.results.length; i++) {
+      full += event.results[i][0].transcript + " ";
+      if (!event.results[i].isFinal) allFinal = false;
     }
+    _onTranscript(full.trim(), allFinal);
   };
-  // The recogniser stops after each phrase (continuous = false) or a pause. While we
-  // still want to listen and are not deliberately paused (for the app's own speech),
-  // start it again — so one session spans a whole line of moves and rides out the pauses
-  // between them, staying hands-free rather than dying at the first one.
+  // The recogniser stops itself after a long enough silence. While we still want to
+  // listen and are not deliberately paused (for the app's own speech), start it again —
+  // so a session outlives the pause after the user finishes a line and stays hands-free
+  // rather than dying at the first silence.
   recognition.onend = () => {
     if (_recognition === recognition) {
       _recognition = null;

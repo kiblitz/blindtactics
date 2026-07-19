@@ -56,8 +56,16 @@ pub fn App() -> impl IntoView {
     let countdown = RwSignal::new(None::<u32>);
     let interval = RwSignal::new(None::<IntervalHandle>);
     // The provisional arrow streamed onto the board while the user is still speaking a
-    // move — shown ghosted, replaced by a committed arrow on a final transcript.
+    // move — shown ghosted, replaced by a committed arrow once the move is settled.
     let preview = RwSignal::new(None::<arrow::Arrow>);
+    // Streaming multi-move state. A `continuous` recogniser hands back a growing
+    // transcript that may hold several moves ("queen f5 queen g6"); `committed` counts how
+    // many of the current utterance's parsed moves we have already drawn, so a growing
+    // interim only draws the *new* ones. `just_finalized` resets that count at the next
+    // utterance: a final ends one utterance and the recogniser restarts fresh, so the
+    // following transcript's moves start from zero. See "Voice input" in CLAUDE.md.
+    let committed = RwSignal::new(0usize);
+    let just_finalized = RwSignal::new(false);
 
     // The whole attempt in one signal, so its reset invariant lives in one place a
     // native test can reach — see `session::Attempt`.
@@ -263,49 +271,100 @@ pub fn App() -> impl IntoView {
     let handle_voice = move |transcript: String, is_final: bool| {
         // Any speech — even a partial — is activity: restart the silence countdown.
         start_countdown();
-        let heard = puzzle.with_untracked(|p| {
-            attempt.with_untracked(|a| session::interpret(&transcript, p, a.arrows()))
-        });
-        // Log the raw transcript and what it resolved to. Voice input is the most
-        // bug-prone part of the app and cannot be e2e-tested (no recognition in headless
-        // chromium), so a console trail of exactly what the browser heard is the only way
-        // to diagnose a mishear like "knight f7" → "I did not catch that".
-        leptos::logging::log!("voice: heard {transcript:?} final={is_final} -> {heard:?}");
-        match heard {
-            // Stream the provisional move onto the board while the user is still
-            // speaking (interim), and commit it only when the phrase settles (final).
-            session::Heard::Draw { arrow } => {
-                if is_final {
-                    preview.set(None);
-                    attempt.update(|a| a.draw(arrow));
-                } else {
-                    preview.set(Some(arrow));
+
+        // A final ends one utterance; the recogniser then restarts fresh, so this
+        // transcript's moves count from zero rather than after the previous utterance's.
+        if just_finalized.get_untracked() {
+            committed.set(0);
+            just_finalized.set(false);
+        }
+
+        let parsed = diction::parse_line(&transcript);
+        // Voice input is the most bug-prone part of the app and cannot be e2e-tested (no
+        // recognition in headless chromium), so a console trail of exactly what the
+        // browser heard, and how it segmented, is the only way to diagnose a mishear.
+        leptos::logging::log!(
+            "voice: heard {transcript:?} final={is_final} -> {:?} trailing={}",
+            parsed.intents,
+            parsed.trailing,
+        );
+
+        // Confirm-on-next: a complete move is drawn once another segment follows it, or
+        // on a final. During an interim the *last* complete move is held back — it may
+        // still be revised as the user keeps speaking — and only shown as a preview.
+        let confirmed = if parsed.trailing || is_final {
+            parsed.intents.len()
+        } else {
+            parsed.intents.len().saturating_sub(1)
+        };
+
+        // Draw the newly-confirmed moves, each against the position it is made from (the
+        // line grown by the moves before it). Stop at anything that needs the user — an
+        // ambiguity, a promotion, an illegal move — or, on an interim, a command.
+        let mut idx = committed.get_untracked().min(parsed.intents.len());
+        while idx < confirmed {
+            match &parsed.intents[idx] {
+                diction::Intent::Command(command) => {
+                    // Commands act only on a final — a mid-utterance "submit" must not fire.
+                    if !is_final {
+                        break;
+                    }
+                    match command {
+                        diction::Command::Submit => submit(()),
+                        diction::Command::Undo => undo(()),
+                        diction::Command::Clear => clear(()),
+                        diction::Command::Next => next(()),
+                        diction::Command::GiveUp => give_up(()),
+                        diction::Command::Repeat => {
+                            speech::say(&position.with_untracked(|p| roster::of(p).speech()));
+                        }
+                    }
+                    idx += 1;
                 }
-            }
-            // Questions, misses, and commands act on the settled phrase only — an
-            // interim "sub…" must not fire submit.
-            session::Heard::Say(text) => {
-                if is_final {
-                    preview.set(None);
-                    speech::say(&text);
-                }
-            }
-            session::Heard::Command(command) => {
-                if !is_final {
-                    return;
-                }
-                preview.set(None);
-                match command {
-                    diction::Command::Submit => submit(()),
-                    diction::Command::Undo => undo(()),
-                    diction::Command::Clear => clear(()),
-                    diction::Command::Next => next(()),
-                    diction::Command::GiveUp => give_up(()),
-                    diction::Command::Repeat => {
-                        speech::say(&position.with_untracked(|p| roster::of(p).speech()));
+                intent => {
+                    let heard = puzzle.with_untracked(|p| {
+                        attempt.with_untracked(|a| session::resolve_spoken(intent, p, a.arrows()))
+                    });
+                    match heard {
+                        session::Heard::Draw { arrow } => {
+                            attempt.update(|a| a.draw(arrow));
+                            idx += 1;
+                        }
+                        // A question or miss: speak it (on a final only, so an interim does
+                        // not repeat it every word) and wait — do not race past it.
+                        session::Heard::Say(text) => {
+                            if is_final {
+                                speech::say(&text);
+                            }
+                            break;
+                        }
+                        session::Heard::Command(_) => {
+                            unreachable!("a move intent never resolves to a command")
+                        }
                     }
                 }
             }
+        }
+        committed.set(idx);
+
+        // Preview the move still being spoken: the last unconfirmed complete move,
+        // ghosted, when it resolves to an arrow.
+        let ghost = (idx < parsed.intents.len())
+            .then(|| {
+                puzzle.with_untracked(|p| {
+                    attempt.with_untracked(|a| {
+                        session::resolve_spoken(&parsed.intents[idx], p, a.arrows())
+                    })
+                })
+            })
+            .and_then(|heard| match heard {
+                session::Heard::Draw { arrow } => Some(arrow),
+                _ => None,
+            });
+        preview.set(ghost);
+
+        if is_final {
+            just_finalized.set(true);
         }
     };
 
@@ -315,6 +374,9 @@ pub fn App() -> impl IntoView {
     let start_listening = move || {
         if recognition::start(handle_voice) {
             listening.set(true);
+            // Fresh session: the streaming move counter starts over.
+            committed.set(0);
+            just_finalized.set(false);
             start_countdown();
             true
         } else {
@@ -371,6 +433,11 @@ pub fn App() -> impl IntoView {
     // left on from the previous puzzle is turned off.
     Effect::new(move |_| {
         puzzle.track();
+        // The line is empty again, so the streaming move counter resets — a mic left on
+        // across puzzles (audio mode) would otherwise carry the last count into a new line.
+        committed.set(0);
+        just_finalized.set(false);
+        preview.set(None);
         let want = input_mode
             .get_untracked()
             .arms_next(mic_desired.get_untracked());
