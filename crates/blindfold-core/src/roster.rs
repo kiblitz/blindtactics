@@ -136,7 +136,7 @@ impl Roster {
 
     /// Render as plain text — for display and for a screen reader.
     ///
-    /// `"white to play. white: king d5, bishops b4 c6, pawns a6 b7 g5. black: king g7."`
+    /// `"white to play. white: king d5. bishops b4, c6. pawns a6, b7, g5. black: king g7."`
     ///
     /// Plain coordinates (`a2`), because that is what the eye reads and what a screen
     /// reader spells for itself. Our *own* text-to-speech wants [`speech`](Roster::speech)
@@ -154,10 +154,10 @@ impl Roster {
     ///
     /// Separate from [`text`](Roster::text) deliberately. Handing "a2" to the
     /// browser's `speechSynthesis` gets the lone file letter read as the article "a" —
-    /// "ah two" rather than "ay two". This spells it out (`"ay two"`) so the file is
-    /// spoken as a letter. It is *not* right for a screen reader, which spells
-    /// coordinates correctly on its own and would read "ay two" as gibberish, which is
-    /// why the two renderings stay distinct. See [`square_spoken`].
+    /// "ah two" rather than "ay two". This spells it out so the file is spoken as a
+    /// letter. It is *not* right for a screen reader, which spells coordinates correctly
+    /// on its own and would read the spelled-out form as gibberish, which is why the two
+    /// renderings stay distinct. See [`square_spoken`].
     pub fn speech(&self) -> String {
         self.render(square_spoken)
     }
@@ -178,7 +178,7 @@ impl Roster {
 }
 
 impl Side {
-    /// `"white: king e1, queen f4, rooks a1 c2, may castle queenside."`
+    /// `"white: king e1. queen f4. rooks a1, c2. may castle queenside."`
     pub fn text(&self) -> String {
         self.render(square_plain)
     }
@@ -188,7 +188,16 @@ impl Side {
         if let Some(castling) = self.castling.text() {
             listed.push(castling.to_owned());
         }
-        format!("{}: {}.", color_name(self.color), listed.join(", "))
+        // Piece types are separated by ". " (a full stop), the squares *within* a type
+        // by ", " — so a read-aloud voice pauses hardest between the roles it is
+        // listing and only lightly between the squares of one role. The same grouping
+        // reads just as clearly for a screen reader, which is why it lives in the
+        // shared render rather than only in `speech`.
+        format!(
+            "{}: {}.",
+            color_name(self.color),
+            listed.join(constants::ROSTER_TYPE_SEP)
+        )
     }
 }
 
@@ -206,14 +215,18 @@ impl Castling {
 }
 
 impl Entry {
-    /// `"pawns a6 b7 g5"`, or `"king d5"` for a lone piece.
+    /// `"pawns a6, b7, g5"`, or `"king d5"` for a lone piece.
     pub fn text(&self) -> String {
         self.render(square_plain)
     }
 
     fn render(&self, square: fn(shakmaty::Square) -> String) -> String {
         let squares: Vec<String> = self.squares.iter().map(|s| square(*s)).collect();
-        format!("{} {}", self.name(), squares.join(" "))
+        format!(
+            "{} {}",
+            self.name(),
+            squares.join(constants::ROSTER_SQUARE_SEP)
+        )
     }
 
     /// The role's name, pluralized to match the number of squares.
@@ -231,13 +244,14 @@ fn square_plain(square: shakmaty::Square) -> String {
 }
 
 /// A square spelled for text-to-speech: the file as its spoken letter *name*, the
-/// rank as its digit — `b7` → `"bee seven"`, `a2` → `"ay two"`.
+/// rank as its digit — `b7` → `"bee 7"`, `a2` → `"A. 2"` (the initial that reads "ay").
 ///
 /// Why not just "a2": a speech engine reads the lone file letter as a *word*, so "a2"
 /// comes out "ah two" (the article "a"), and other files fare no better. Spelling the
-/// file as its name forces the letter. The rank digit is left as a digit — "7" is read
-/// "seven" reliably, unlike the file letters. Read off the square's own `Display`
-/// (`"a1"`), so the file/rank split cannot disagree with how a square prints.
+/// file as its name forces the letter — see [`file_spoken`] for why the `a` file is the
+/// odd one. The rank digit is left as a digit — "7" is read "seven" reliably, unlike the
+/// file letters. Read off the square's own `Display` (`"a1"`), so the file/rank split
+/// cannot disagree with how a square prints.
 pub fn square_spoken(square: shakmaty::Square) -> String {
     let coordinates = square.to_string();
     let mut chars = coordinates.chars();
@@ -249,9 +263,16 @@ pub fn square_spoken(square: shakmaty::Square) -> String {
 }
 
 /// The spoken name of a file letter — the letter as a speech engine will read it.
+///
+/// The `a` file is the awkward one. Spelled as a word it is read as the article ("a2"
+/// → "ah two"); spelled `"ay"` it is read as `/aɪ/`, the word "aye" ("a2" → "eye two").
+/// Neither is the letter's *name*, `/eɪ/`. Written as the initial `"A."` the engine
+/// drops into letter-name (initials) reading and says `/eɪ/`, with only the light pause
+/// an initial carries — so `a1` speaks as "ay one". The other files have unambiguous
+/// word spellings and need no such trick.
 fn file_spoken(file: char) -> &'static str {
     match file {
-        'a' => "ay",
+        'a' => "A.",
         'b' => "bee",
         'c' => "see",
         'd' => "dee",

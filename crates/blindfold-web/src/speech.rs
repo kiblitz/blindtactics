@@ -11,6 +11,7 @@
 //! says nothing while the on-screen text carries on. Audio is an enhancement layered
 //! over a UI that already works without it.
 
+use crate::constants;
 use wasm_bindgen::JsCast as _;
 
 /// Speak `text` aloud, cancelling whatever was being said first.
@@ -26,6 +27,9 @@ pub fn say(text: &str) {
     let Ok(utterance) = web_sys::SpeechSynthesisUtterance::new_with_text(text) else {
         return;
     };
+    // A calm, unhurried read — a touch slower and lower than the platform default.
+    utterance.set_rate(constants::SPEECH_RATE);
+    utterance.set_pitch(constants::SPEECH_PITCH);
     // A chosen voice, so the reading is not the platform's robotic or novelty default.
     // `None` → leave the browser default, which is still better than not speaking.
     if let Some(voice) = best_voice(&synthesis) {

@@ -125,6 +125,15 @@ pub const POV_STORAGE_KEY: &str = "blindfold.pov";
 /// The `localStorage` key the read-aloud (text-to-speech) preference persists under.
 pub const SOUND_STORAGE_KEY: &str = "blindfold.sound";
 
+/// Speaking rate for the read-aloud voice, as a multiple of the platform default
+/// (`1.0`). A touch under one so the roster is read at an unhurried, deliberate pace
+/// rather than the rushed default — the "calm" half of the voice.
+pub const SPEECH_RATE: f32 = 0.9;
+
+/// Speaking pitch for the read-aloud voice, as a multiple of the platform default
+/// (`1.0`, range `0.0`–`2.0`). Slightly lowered for a calmer, less bright tone.
+pub const SPEECH_PITCH: f32 = 0.9;
+
 /// How many of the closest-rated puzzles the next one is drawn from.
 ///
 /// Selection is "random, near your rating": the candidates are the

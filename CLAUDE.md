@@ -605,11 +605,25 @@ default. When on:
 - A new puzzle is read aloud — `roster::speech()`, the **third** rendering the data model
   was built for (alongside `text` and SVG). It is *not* `text()`: a speech engine reads a
   bare file letter as a word, so "a2" comes out "ah two" (the article "a"). `speech()`
-  spells the file as its letter *name* — `square_spoken(a2)` → `"ay two"`, `b7` → `"bee
-  seven"` — while `text()` keeps plain "a2" for display and screen readers (which spell
-  coordinates themselves and would choke on "ay two"). The two share one `render(square:
-  fn)` so they can only differ in the square spelling, never the words. Pinned by
-  `tests/roster.rs`'s `every_file_is_spelled_out` and `speech_spells_files_as_letter_names`.
+  spells the file as its letter *name* — `square_spoken(b7)` → `"bee 7"` — while `text()`
+  keeps plain "a2" for display and screen readers (which spell coordinates themselves and
+  would choke on the spelled-out form). The two share one `render(square: fn)` so they can
+  only differ in the square spelling, never the words. Pinned by `tests/roster.rs`'s
+  `every_file_is_spelled_out` and `speech_spells_files_as_letter_names`.
+  - **The `a` file is the awkward one and gets spelled `"A."`** (the initial), not a word.
+    Spelled as a word it reads as the article ("ah"); spelled `"ay"` it reads as `/aɪ/`
+    ("eye") on Apple voices — both wrong. Written as the initial `"A."` the engine drops
+    into letter-name reading and says `/eɪ/` ("ay"), which is the point. The other files
+    have unambiguous word spellings (`bee`, `see`, …) and need no trick. See
+    `roster::file_spoken`.
+  - **The roster is grouped for the ear.** Piece *types* are separated by a full stop
+    (`constants::ROSTER_TYPE_SEP`, `". "`), the *squares within* a type by a comma
+    (`ROSTER_SQUARE_SEP`, `", "`) — so the voice pauses hardest between roles and lightly
+    between a role's squares ("king d5. bishops b4, c6. pawns a6, b7, g5."). This is in the
+    shared `render`, so `text()` (the screen-reader rendering) gets the same grouping.
+  - **The read is calmed by lowering rate and pitch** (`constants::SPEECH_RATE` /
+    `SPEECH_PITCH`, both `0.9`) on the utterance in `speech::say`, so the default rushed,
+    bright delivery becomes unhurried — the user's "a bit more zen and calm".
 - The verdict is spoken on submit/give-up — `session::spoken(solve, solver)`, the spoken
   sibling of the panel's `Verdict`, reusing `explain` so the voice and the screen cannot
   say different things, and holding the same discretion (never the move count, so no depth

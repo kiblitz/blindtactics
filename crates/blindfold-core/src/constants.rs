@@ -3,8 +3,8 @@
 //! This is a *category* module, not a concept module, and it is that way on
 //! purpose. Nothing in here is shared between modules — `MAX_LINE` and
 //! `MAX_FRONTIER` belong to `mate`, `MAX_DEPTH` to `puzzle`, `PROMOTABLE` to
-//! `arrow`, `ANNOUNCE_ORDER` to `roster`; all five, and there is no sixth — so
-//! grouping them by "is a constant" rather than by what they are about cuts
+//! `arrow`, and `ANNOUNCE_ORDER` with the two `ROSTER_*_SEP` separators to
+//! `roster` — so grouping them by "is a constant" rather than by what they are about cuts
 //! against how the rest of the crate is organised. It is done anyway
 //! because the project's standing rule is that constants live in a dedicated
 //! constants module, and a rule followed unevenly is worse than either choice
@@ -65,6 +65,16 @@ pub const ANNOUNCE_ORDER: [shakmaty::Role; 6] = [
     shakmaty::Role::Knight,
     shakmaty::Role::Pawn,
 ];
+
+/// What separates one *piece type* from the next when a side's roster is read out —
+/// a full stop, so a read-aloud voice takes its longest pause between the roles it is
+/// listing ("king d5. bishops b4, c6. pawns …").
+pub const ROSTER_TYPE_SEP: &str = ". ";
+
+/// What separates the *squares within* one piece type — a comma, a lighter pause than
+/// [`ROSTER_TYPE_SEP`], so "bishops b4, c6" groups under the one role rather than
+/// sounding like two.
+pub const ROSTER_SQUARE_SEP: &str = ", ";
 
 /// The deepest mate this trainer deals in.
 ///

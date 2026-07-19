@@ -76,7 +76,7 @@ fn reads_a_position() {
     assert_eq!(r.to_move, shakmaty::Color::White);
     assert_eq!(
         r.text(),
-        "white to play. white: king g1, rook a1. black: king g8, pawns f7 g7 h7."
+        "white to play. white: king g1. rook a1. black: king g8. pawns f7, g7, h7."
     );
 }
 
@@ -84,24 +84,25 @@ fn reads_a_position() {
 
 /// The read-aloud rendering spells each file as its letter *name*, so a speech engine
 /// says "gee one", not the "ah two" a bare "a2" produces — the whole reason `speech`
-/// is separate from `text`. Same wording and order; only the squares change.
+/// is separate from `text`. Same wording and order; only the squares change. The `a`
+/// file is spelled as the initial "A." so it reads "ay" rather than "eye" or "ah".
 #[test]
 fn speech_spells_files_as_letter_names() {
     let r = roster::of(&common::pos(common::BACK_RANK));
     assert_eq!(
         r.speech(),
-        "white to play. white: king gee 1, rook ay 1. \
-         black: king gee 8, pawns eff 7 gee 7 aitch 7."
+        "white to play. white: king gee 1. rook A. 1. \
+         black: king gee 8. pawns eff 7, gee 7, aitch 7."
     );
 }
 
-/// Every file has a multi-letter spelling, so no square is ever handed to the engine
-/// as a lone letter — the exact failure ("a2" → "ah two") this rendering fixes. The
-/// rank stays a digit, which a speech engine reads correctly on its own.
+/// No square is ever handed to the engine as a bare file letter — the exact failure
+/// ("a2" → "ah two") this rendering fixes. The rank stays a digit, which a speech engine
+/// reads correctly on its own.
 #[test]
 fn every_file_is_spelled_out() {
     for (square, spoken) in [
-        (shakmaty::Square::A1, "ay 1"),
+        (shakmaty::Square::A1, "A. 1"),
         (shakmaty::Square::B2, "bee 2"),
         (shakmaty::Square::C3, "see 3"),
         (shakmaty::Square::D4, "dee 4"),
@@ -132,7 +133,7 @@ fn announces_the_side_to_move_first() {
     assert_eq!(r.to_move, shakmaty::Color::Black);
     assert_eq!(
         r.text(),
-        "black to play. black: king g8, pawns f7 g7 h7. white: king g1, rook a1.",
+        "black to play. black: king g8. pawns f7, g7, h7. white: king g1. rook a1.",
         "the mover is read out first, as a human would"
     );
     // The struct fields stay colour-keyed regardless of who is to move.
@@ -145,7 +146,7 @@ fn announces_castling_rights() {
     let r = roster::of(&common::pos(common::CASTLING_MATE));
     assert_eq!(
         r.text(),
-        "white to play. white: king e1, queen f4, rooks a1 c2, may castle queenside. \
+        "white to play. white: king e1. queen f4. rooks a1, c2. may castle queenside. \
          black: king d3."
     );
     assert_eq!(
@@ -163,8 +164,8 @@ fn announces_both_castling_rights_together() {
     let r = roster::of(&common::pos("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1"));
     assert_eq!(
         r.text(),
-        "white to play. white: king e1, rooks a1 h1, may castle either side. \
-         black: king e8, rooks a8 h8, may castle either side."
+        "white to play. white: king e1. rooks a1, h1. may castle either side. \
+         black: king e8. rooks a8, h8. may castle either side."
     );
 }
 
@@ -173,7 +174,7 @@ fn announces_an_en_passant_square() {
     let r = roster::of(&common::pos(common::EN_PASSANT_MATE));
     assert_eq!(
         r.text(),
-        "white to play. white: king c1, queen a6, pawn a5. black: king a1, pawn b5. \
+        "white to play. white: king c1. queen a6. pawn a5. black: king a1. pawn b5. \
          en passant on b6."
     );
     assert_eq!(r.en_passant, Some(shakmaty::Square::B6));
@@ -194,7 +195,7 @@ fn stays_silent_about_an_en_passant_square_nobody_can_use() {
     assert_eq!(r.en_passant, None);
     assert_eq!(
         r.text(),
-        "white to play. white: king c1. black: king a1, pawn b5.",
+        "white to play. white: king c1. black: king a1. pawn b5.",
         "no legal capture, so nothing to say"
     );
 }
@@ -240,7 +241,7 @@ fn orders_squares_by_file_then_rank() {
         .iter()
         .find(|e| e.role == shakmaty::Role::Pawn)
         .expect("pawns");
-    assert_eq!(pawns.text(), "pawns a6 b7 g5");
+    assert_eq!(pawns.text(), "pawns a6, b7, g5");
 }
 
 #[test]
