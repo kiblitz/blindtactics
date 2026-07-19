@@ -785,8 +785,10 @@ The browser half (built):
   for the app to finish). A no-op when the mic is off. **Not e2e-testable** (no recognition
   service in headless chromium).
 - `app` wiring: the record button (in the line panel, shown only when supported) toggles
-  listening; arming reads the roster aloud (that tap is the gesture browsers demand before
-  speech). Each transcript goes to `interpret`; a **final** result drives the **same action
+  listening. **Arming does not read the roster** — turning on the mic must not, on its own,
+  start talking (the user's call); the roster is read only by the `Output` auto-read or the
+  roster speak button. The tap is still a user gesture, so it unlocks the browser's speech for
+  a later verdict. Each transcript goes to `interpret`; a **final** result drives the **same action
   closures the buttons use** — `submit`/`undo`/`clear`/`next`/`give_up` and `draw` — while an
   **interim** result only streams a `preview` ghost arrow (so a half-said "sub…" cannot fire
   submit). Voice confirmations/questions speak through `speech` **directly, not gated on the

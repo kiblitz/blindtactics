@@ -309,19 +309,19 @@ pub fn App() -> impl IntoView {
     };
 
     // The record control: arm or disarm the mic, recording the user's intent so audio
-    // mode carries it across puzzles. Arming reads the roster at once — that tap is the
-    // gesture browsers demand before any speech, and hearing the puzzle is the
-    // hands-free start.
+    // mode carries it across puzzles. Arming does *not* read the roster — the puzzle is
+    // read only by the output setting's auto-read or the roster's speak button (the
+    // user's call: turning on the mic should not, on its own, start talking). The tap is
+    // still a user gesture, so it unlocks the browser's speech for a later verdict.
     let toggle_mic = move |()| {
         if listening.get_untracked() {
             mic_desired.set(false);
             deafen();
         } else {
             mic_desired.set(true);
-            if start_listening() {
-                speech::say(&position.with_untracked(|p| roster::of(p).speech()));
-            } else {
-                // Refused: do not leave the button armed over a mic that never started.
+            // Refused (no permission / no gesture): do not leave the button armed over a
+            // mic that never started.
+            if !start_listening() {
                 mic_desired.set(false);
             }
         }
