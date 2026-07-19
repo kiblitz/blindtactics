@@ -154,9 +154,9 @@ blindfold-chess-trainer/
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 10 cases —
-  the reveal test runs on two pinned puzzles, a `voice` spec drives a fake recogniser,
-  and a `mobile` project runs a touch spec on a phone viewport), clippy clean. Blank board,
+- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 11 cases —
+  the reveal test runs on two pinned puzzles, a `voice` spec drives a fake recogniser over
+  two cases, and a `mobile` project runs a touch spec on a phone viewport), clippy clean. Blank board,
   drag-drawn numbered arrows each in its own colour, roster panel with real piece
   artwork (and a speak button), a per-move promotion control, a hover highlight, a board
   flip and a settings menu (point of view, plus voice mode's input/output modes and a
@@ -403,10 +403,11 @@ faces" below); a fifth that giving up reveals the solution as a scored loss and 
 move list navigates by both click and arrow key (see "The analysis move list" above); a
 sixth — in a separate `mobile` Playwright *project* on a phone viewport,
 `e2e/mobile.spec.js` — that a **touch** drag draws an arrow and the page does not scroll
-at all (see "Mobile" above); and a seventh — `e2e/voice.spec.js` — that a spoken line
-streams move-by-move onto the board and a spoken command submits, driven through a **fake
-`webkitSpeechRecognition`** stubbed in before load (see "Voice input" for why this is
-possible without real recognition in headless chromium). Shared e2e utilities
+at all (see "Mobile" above); and a seventh — `e2e/voice.spec.js` (two cases) — that a spoken
+line streams move-by-move onto the board and either a spoken command *or a pause past the
+silence threshold* submits it, driven through a **fake `webkitSpeechRecognition`** stubbed in
+before load (see "Voice input" for why this is possible without real recognition in headless
+chromium). Shared e2e utilities
 (`collectErrors`, the board/drag constants) live in `e2e/helpers.js` so the specs cannot
 drift on what a page error or a drag budget is.
 
@@ -726,10 +727,14 @@ re-arms from `Input::arms_next(mic_desired)` on each new puzzle — `Draw` reset
 carries the last state. While listening, a countdown (`silence_secs`, a stepper setting) runs
 on a 1-second interval, reset by every heard phrase; **at zero it submits the assembled line,
 then turns the mic off** — the user speaks the whole line, stops, and the pause *is* the
-submit. It submits only when a line is drawn and the board is not already revealed (a silence
-over an empty or solved line just deafens; submitting nothing would score a loss). The
-timeout does *not* touch `mic_desired`, so a silence timeout in `Speak` mode still re-arms next
-puzzle (only the user pressing the button counts as intent).
+submit (the user's stated primary flow: a pause past the threshold submits, no spoken "submit"
+needed). Because the last spoken move is held as a `preview` ghost (confirm-on-next) and a
+silence may beat the recogniser's own final, the silence-submit **commits that held ghost
+first**, or the line would be short its final move. It submits only when a line is drawn and the
+board is not already revealed (a silence over an empty or solved line just deafens; submitting
+nothing would score a loss). The timeout does *not* touch `mic_desired`, so a silence timeout in
+`Speak` mode still re-arms next puzzle (only the user pressing the button counts as intent).
+Pinned by `voice.spec.js`'s pause-submit case.
 
 **The streaming multi-move parse is the heart of it.** The user is not made to speak one move
 per breath; they say a whole line ("queen f5 queen g6") and each move draws as it lands.
@@ -738,9 +743,14 @@ per breath; they say a whole line ("queen f5 queen g6") and each move draws as i
 complete move is drawn once *another* segment follows it (so the last, still-being-revised move
 is held back and shown as the `preview` ghost until it settles or the utterance finalises).
 `committed` counts how many of the current utterance's moves are already drawn so a growing
-interim only draws the new ones; `just_finalized` resets that count at the next utterance
-(a final ends one, the recogniser restarts fresh), and the per-puzzle effect resets it too (the
-line is empty again). Each move resolves against the position it is made from — the line grown
+interim only draws the new ones. The reset of that count is keyed on **whether the transcript
+still extends the previous one** (`heard_so_far`): while each event extends the last, the count
+carries forward; when a transcript no longer starts with the previous, the recogniser has
+restarted fresh (Chrome ends a session on its own silence and reopens) and the count resets to
+zero — and the per-puzzle effect resets it too (the line is empty again). Resetting on *every*
+final instead (an earlier cut used a `just_finalized` flag) double-draws the earlier moves
+whenever the user speaks with a gap long enough to finalise a segment mid-line — do not
+restore it. Each move resolves against the position it is made from — the line grown
 by the moves before it — via `session::resolve_spoken` (the per-move core of `interpret`).
 Commands stream too ("queen f5 queen g6 submit"), but a command fires **only on a final** (a
 mid-utterance "submit" must not). A move that needs the user (ambiguous, needs promotion,

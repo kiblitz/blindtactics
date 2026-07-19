@@ -61,11 +61,14 @@ pub fn App() -> impl IntoView {
     // Streaming multi-move state. A `continuous` recogniser hands back a growing
     // transcript that may hold several moves ("queen f5 queen g6"); `committed` counts how
     // many of the current utterance's parsed moves we have already drawn, so a growing
-    // interim only draws the *new* ones. `just_finalized` resets that count at the next
-    // utterance: a final ends one utterance and the recogniser restarts fresh, so the
-    // following transcript's moves start from zero. See "Voice input" in CLAUDE.md.
+    // interim only draws the *new* ones. `heard_so_far` is the previous transcript: while
+    // each event *extends* it the count carries forward, but when a transcript no longer
+    // starts with it the recogniser has restarted fresh (Chrome ends a session on its own
+    // silence and reopens) and the count resets to zero. Resetting on *every* final instead
+    // would double-draw the earlier moves whenever the user speaks with a gap long enough
+    // to finalise a segment mid-line. See "Voice input" in CLAUDE.md.
     let committed = RwSignal::new(0usize);
-    let just_finalized = RwSignal::new(false);
+    let heard_so_far = RwSignal::new(String::new());
 
     // The whole attempt in one signal, so its reset invariant lives in one place a
     // native test can reach — see `session::Attempt`.
@@ -250,6 +253,14 @@ pub fn App() -> impl IntoView {
             move || {
                 let remaining = countdown.get_untracked().unwrap_or(0).saturating_sub(1);
                 if remaining == 0 {
+                    // The last spoken move is held as a preview (confirm-on-next) until the
+                    // next segment or the recogniser's final settles it. A silence submits
+                    // before either may arrive, so commit that ghost first — otherwise the
+                    // line would be short its final move.
+                    if let Some(arrow) = preview.get_untracked() {
+                        attempt.update(|a| a.draw(arrow));
+                        preview.set(None);
+                    }
                     // Submit the assembled line — but only when there is one to judge and
                     // the board is not already revealed. A silence over an empty or solved
                     // line just turns the mic off (submitting nothing would score a loss).
@@ -272,12 +283,14 @@ pub fn App() -> impl IntoView {
         // Any speech — even a partial — is activity: restart the silence countdown.
         start_countdown();
 
-        // A final ends one utterance; the recogniser then restarts fresh, so this
-        // transcript's moves count from zero rather than after the previous utterance's.
-        if just_finalized.get_untracked() {
+        // A transcript that no longer extends the last one is a fresh recogniser session
+        // (Chrome closed the previous on its own silence and reopened), so its moves count
+        // from zero. A transcript that *does* extend the last one is the same line still
+        // growing — keep the count, so already-drawn moves are not drawn again.
+        if !transcript.starts_with(&heard_so_far.get_untracked()) {
             committed.set(0);
-            just_finalized.set(false);
         }
+        heard_so_far.set(transcript.clone());
 
         let parsed = diction::parse_line(&transcript);
         // Voice input is the most bug-prone part of the app and cannot be e2e-tested (no
@@ -362,10 +375,6 @@ pub fn App() -> impl IntoView {
                 _ => None,
             });
         preview.set(ghost);
-
-        if is_final {
-            just_finalized.set(true);
-        }
     };
 
     // Start listening, returning whether it actually started. Drives the silence
@@ -374,9 +383,9 @@ pub fn App() -> impl IntoView {
     let start_listening = move || {
         if recognition::start(handle_voice) {
             listening.set(true);
-            // Fresh session: the streaming move counter starts over.
+            // Fresh session: the streaming move counter and heard-transcript start over.
             committed.set(0);
-            just_finalized.set(false);
+            heard_so_far.set(String::new());
             start_countdown();
             true
         } else {
@@ -436,7 +445,7 @@ pub fn App() -> impl IntoView {
         // The line is empty again, so the streaming move counter resets — a mic left on
         // across puzzles (audio mode) would otherwise carry the last count into a new line.
         committed.set(0);
-        just_finalized.set(false);
+        heard_so_far.set(String::new());
         preview.set(None);
         let want = input_mode
             .get_untracked()

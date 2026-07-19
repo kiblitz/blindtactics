@@ -103,6 +103,22 @@ async function spokenLine(page, solution) {
   return spoken;
 }
 
+// Force the silence timeout to a chosen number of seconds, before load. Written to the
+// same localStorage key `settings::save_silence` uses, so `load_silence` reads it at
+// mount. Registered after the puzzle-pin script (which clears storage) so it survives.
+async function setSilence(page, secs) {
+  await page.addInitScript(
+    ({ key, value }) => {
+      try {
+        window.localStorage.setItem(key, value);
+      } catch (e) {
+        // Storage unavailable (private mode); the default timeout applies instead.
+      }
+    },
+    { key: "blindfold.silence", value: String(secs) }
+  );
+}
+
 // Fire one transcript on the live fake recogniser, as the browser's onresult would.
 async function fire(page, transcript, isFinal) {
   await page.evaluate(
@@ -170,6 +186,43 @@ test("a spoken line streams each move onto the board, then a voice command submi
   // would not reveal, leaving the steps in place and this failing loudly.
   await fire(page, `${spoken.join(" ")} submit`, true);
   await expect(page.locator(".board--revealed")).toHaveCount(1);
+  await expect(page.locator(".verdict")).toContainText("Mate");
+  await expect(page.locator(".movelist__ply")).toHaveCount(spoken.length * 2 - 1);
+
+  expect(errors).toEqual([]);
+});
+
+// The primary hands-free flow the user described: speak the whole line, then *stop* — a
+// pause past the silence threshold submits, no spoken "submit" needed. The last move is
+// held as a preview (confirm-on-next) and no recogniser final is fired here, so this also
+// pins that the silence-submit commits that held ghost before judging — otherwise the line
+// would be short its final move. The timeout is forced to its 2s minimum so the wait is short.
+test("a pause past the silence threshold submits the spoken line", async ({ page }) => {
+  const errors = collectErrors(page);
+  const solutions = solutionsById();
+
+  await pinAndFake(page, 0.95);
+  await setSilence(page, 2);
+  await page.goto("/");
+  await expect(page.locator(".board")).toBeVisible();
+
+  const { line } = await currentSolution(page, solutions);
+  const spoken = await spokenLine(page, line);
+
+  await page.getByRole("button", { name: "Voice input" }).click();
+  await expect(page.locator(".button--recording")).toHaveCount(1);
+
+  // Speak the whole line as growing interims — no final, no spoken command. Every move
+  // but the last commits; the last is the held preview ghost.
+  const steps = page.locator(".line__step");
+  for (let i = 0; i < spoken.length; i++) {
+    await fire(page, spoken.slice(0, i + 1).join(" "), false);
+    await expect(steps).toHaveCount(i, { timeout: 2000 });
+  }
+
+  // Then go silent. The countdown elapses, commits the held last move, submits the full
+  // line, and the mate reveals — with no further input from the user.
+  await expect(page.locator(".board--revealed")).toHaveCount(1, { timeout: 8000 });
   await expect(page.locator(".verdict")).toContainText("Mate");
   await expect(page.locator(".movelist__ply")).toHaveCount(spoken.length * 2 - 1);
 
