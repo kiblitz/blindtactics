@@ -244,14 +244,15 @@ fn square_plain(square: shakmaty::Square) -> String {
 }
 
 /// A square spelled for text-to-speech: the file as its spoken letter *name*, the
-/// rank as its digit — `b7` → `"bee 7"`, `a2` → `"A. 2"` (the initial that reads "ay").
+/// rank as its digit — `b7` → `"B. 7"`, `a2` → `"A. 2"` (the initials that read "bee",
+/// "ay").
 ///
 /// Why not just "a2": a speech engine reads the lone file letter as a *word*, so "a2"
 /// comes out "ah two" (the article "a"), and other files fare no better. Spelling the
-/// file as its name forces the letter — see [`file_spoken`] for why the `a` file is the
-/// odd one. The rank digit is left as a digit — "7" is read "seven" reliably, unlike the
-/// file letters. Read off the square's own `Display` (`"a1"`), so the file/rank split
-/// cannot disagree with how a square prints.
+/// file as its initial forces letter-name reading — see [`file_spoken`]. The rank digit
+/// is left as a digit — "7" is read "seven" reliably, unlike the file letters. Read off
+/// the square's own `Display` (`"a1"`), so the file/rank split cannot disagree with how a
+/// square prints.
 pub fn square_spoken(square: shakmaty::Square) -> String {
     let coordinates = square.to_string();
     let mut chars = coordinates.chars();
@@ -262,24 +263,28 @@ pub fn square_spoken(square: shakmaty::Square) -> String {
     format!("{} {}", file_spoken(file), rank)
 }
 
-/// The spoken name of a file letter — the letter as a speech engine will read it.
+/// The spoken name of a file letter — written as the letter's *initial* so a speech
+/// engine reads its name.
 ///
-/// The `a` file is the awkward one. Spelled as a word it is read as the article ("a2"
-/// → "ah two"); spelled `"ay"` it is read as `/aɪ/`, the word "aye" ("a2" → "eye two").
-/// Neither is the letter's *name*, `/eɪ/`. Written as the initial `"A."` the engine
-/// drops into letter-name (initials) reading and says `/eɪ/`, with only the light pause
-/// an initial carries — so `a1` speaks as "ay one". The other files have unambiguous
-/// word spellings and need no such trick.
+/// Every file is spelled `"A."` … `"H."` rather than as a word, and that uniformity is
+/// deliberate, arrived at empirically (a text-to-speech → speech-recognition loop over
+/// three neural voices). Word spellings misfire two ways: a bare vowel letter is read as
+/// a *word* — "a2" → "ah two" (the article), "ay" → `/aɪ/` "eye" — and a held-vowel
+/// spelling like `"ee"` is stretched or doubled on some voices ("ee 3" → "e-e three").
+/// The initial form drops the engine into letter-name (initials) reading — `"A."` →
+/// "ay", `"E."` → "ee" — crisply and consistently, with only the light pause an initial
+/// carries. `b`–`h` sound the same as their old word spellings; `a` and `e` are the ones
+/// this rescues.
 fn file_spoken(file: char) -> &'static str {
     match file {
         'a' => "A.",
-        'b' => "bee",
-        'c' => "see",
-        'd' => "dee",
-        'e' => "ee",
-        'f' => "eff",
-        'g' => "gee",
-        'h' => "aitch",
+        'b' => "B.",
+        'c' => "C.",
+        'd' => "D.",
+        'e' => "E.",
+        'f' => "F.",
+        'g' => "G.",
+        'h' => "H.",
         _ => unreachable!("a board file is one of a-h"),
     }
 }

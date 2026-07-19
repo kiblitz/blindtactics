@@ -95,6 +95,10 @@ fn best_voice(synthesis: &web_sys::SpeechSynthesis) -> Option<web_sys::SpeechSyn
 /// - **English only.** A French voice reading English coordinates is worse than the
 ///   default, so non-`en` langs are skipped; US English is preferred since the wording
 ///   assumes it.
+/// - **Male preferred**, as the calmer read (the user's call). The API exposes no gender,
+///   so it is inferred from the name — known male personas, or an explicit "male" (Android
+///   names its voices). The bonus is under a quality tier, so a good female voice still
+///   wins over a robotic male one.
 pub fn voice_score(name: &str, voice_uri: &str, lang: &str) -> Option<i32> {
     let lang = lang.to_ascii_lowercase();
     if !lang.starts_with("en") {
@@ -209,6 +213,25 @@ pub fn voice_score(name: &str, voice_uri: &str, lang: &str) -> Option<i32> {
     if APPLE_GOOD.iter().any(|persona| name.starts_with(persona)) {
         score += 25;
     }
+
+    // A male voice, preferred as the calmer read (the user's call). The API exposes no
+    // gender, so it is inferred from the name: the known male personas below, plus an
+    // explicit "male" in the name (Android names its voices "Google UK English Male").
+    // Guard the substring against "female", which contains "male". The bonus is smaller
+    // than a quality tier, so a *good* female voice still beats a robotic male one — the
+    // aim is the calmest good voice, not male at any cost.
+    const MALE_PERSONAS: &[&str] = &[
+        "aaron", "alex", "arthur", "daniel", "evan", "gordon", "lee", "nathan", "oliver", "rishi",
+        "tom",
+    ];
+    let is_male = (name.contains("male") && !name.contains("female"))
+        || MALE_PERSONAS
+            .iter()
+            .any(|persona| name.starts_with(persona));
+    if is_male {
+        score += 30;
+    }
+
     if name.starts_with("ava") {
         score += 12; // Apple's most natural US voice.
     }

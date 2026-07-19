@@ -610,12 +610,24 @@ default. When on:
   would choke on the spelled-out form). The two share one `render(square: fn)` so they can
   only differ in the square spelling, never the words. Pinned by `tests/roster.rs`'s
   `every_file_is_spelled_out` and `speech_spells_files_as_letter_names`.
-  - **The `a` file is the awkward one and gets spelled `"A."`** (the initial), not a word.
-    Spelled as a word it reads as the article ("ah"); spelled `"ay"` it reads as `/aɪ/`
-    ("eye") on Apple voices — both wrong. Written as the initial `"A."` the engine drops
-    into letter-name reading and says `/eɪ/` ("ay"), which is the point. The other files
-    have unambiguous word spellings (`bee`, `see`, …) and need no trick. See
-    `roster::file_spoken`.
+  - **Every file is spelled as its initial** — `"A."` … `"H."`, not as words. This was
+    settled empirically with a TTS→STT loop (`edge-tts` neural voices → `faster-whisper`;
+    throwaway scripts, not committed): word spellings misfire two ways — a bare vowel is
+    read as a *word* ("a2" → "ah two"; "ay" → `/aɪ/` "eye"), and a held-vowel spelling like
+    `"ee"` is stretched/doubled on some voices ("ee 3" → "e-e three"). The initial form
+    (`"A."` → "ay", `"E."` → "ee") drops the engine into crisp letter-name reading on all
+    three voices tested. `b`–`h` sound identical to their old word spellings; `a` and `e`
+    are the ones it rescues. See `roster::file_spoken`. **The loop is a reusable tool**: to
+    re-check a spelling, `pip install edge-tts faster-whisper`, synthesize the phrase, and
+    transcribe — a recognizer "hearing" the wrong letter is the bug reproduced. It is a
+    Microsoft-neural proxy, not Apple's exact letter-to-sound, but it reproduced the real
+    `ay`→"eye" bug, so it tracks.
+  - **The voice prefers male**, as the calmer/"more zen" read (the user's call). The API
+    exposes no gender, so `voice_score` infers it from the name (known male personas, or an
+    explicit "male" — guarded against "female", which contains it). The bonus is under a
+    quality tier, so a good female voice still beats a robotic male one. Pinned by
+    `tests/speech.rs`'s `a_male_voice_is_preferred_at_a_comparable_tier` and
+    `a_good_female_voice_still_beats_a_low_tier_male_one`.
   - **The roster is grouped for the ear.** Piece *types* are separated by a full stop
     (`constants::ROSTER_TYPE_SEP`, `". "`), the *squares within* a type by a comma
     (`ROSTER_SQUARE_SEP`, `", "`) — so the voice pauses hardest between roles and lightly
