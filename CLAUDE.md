@@ -335,21 +335,28 @@ its only consumer. That is the line; it is not "no strings in core".
   speaking and resumes on the utterance's `end` (guarded so a rapid re-`say` does not
   un-deafen between two utterances). Browser-only by nature, like `storage`.
 - `recognition` — the read-aloud output's mirror: speech *input*, a thin `inline_js` wrapper
-  over `webkitSpeechRecognition` (`is_supported()` / `start(on_transcript)` / `stop()` /
-  `pause()` / `resume()`). **Interim results and `continuous` are both on**, so
-  `on_transcript(transcript, is_final)` fires repeatedly as the user speaks and the user is
-  never made to pause between moves. Two things this module does because of `continuous`:
-  it forwards the **full accumulated transcript** every event (all results concatenated), not
-  just the newest slice, because Chrome batches a whole spoken line and the parser wants the
-  whole thing to segment (`"queen f5 queen g6"` → two moves); and `is_final` is true only once
-  *every* result has settled (the whole utterance is done). The Rust side
-  (`diction::parse_line` + `app::handle_voice`) segments that transcript into moves and streams
-  them — draw each as the next begins, hold the last until it settles. (An earlier cut used
-  `continuous = false` to force one-move-per-final; it worked but made the user pause between
-  moves, so it was replaced by the streaming parser — do not "restore" it.) No logic with a
-  right answer — *what a transcript means* is `session::interpret` / `resolve_spoken`; this
-  only starts/stops/pauses the recogniser and forwards each transcript. Browser-only by nature,
-  and degrades to "unsupported" where there is no recognition. See "Voice input".
+  over **Vosk** (a Kaldi recogniser compiled to WebAssembly, run fully in the browser) —
+  `is_supported()` / `start(on_transcript)` / `stop()` / `pause()` / `resume()`, the same Rust
+  interface the old `webkitSpeechRecognition` wrapper had, so the app side is unchanged. It
+  emits `partialresult` events as the user speaks (forwarded `is_final == false`, the growing
+  partial of the *current* phrase) and a `result` when a phrase settles (`is_final == true`).
+  The Rust side (`diction::parse_line` + `app::handle_voice`) segments each transcript into
+  moves and streams them — draw each as the next begins, hold the last until it settles; the
+  per-utterance partial resets between phrases, which `handle_voice`'s `heard_so_far`
+  prefix-reset absorbs. **Why Vosk and not the browser's own recogniser:** `webkitSpeechRecognition`
+  streams audio to Google's *general-purpose* model and ignores the Web Speech grammar API, so it
+  cannot be told "expect chess" — it confidently returned "rugby" for "rook b", "rookie" for
+  "rook e", "9" for a bare rank. Vosk takes a **grammar** (a fixed word list, `GRAMMAR` in the
+  module) and can *only* emit words in it, so that whole class of everyday-word mishears is gone —
+  and the audio never leaves the machine (offline, no permission-to-Google). This is the engine
+  Lichess uses. Cost: a one-time ~41 MB model + ~6 MB library, served **same-origin** from
+  `dist/vosk/` (see `fetch-vosk.sh` / the Trunk hook) and lazy-loaded only when the mic is first
+  armed; a returning visitor pays nothing (browser cache). The grammar is kept in lockstep with
+  `diction`'s homophone tables — `diction` still does the fuzzy mapping (number words to ranks,
+  "night" to knight), this just bounds what can arrive. No logic with a right answer — *what a
+  transcript means* is `session::interpret` / `resolve_spoken`; this only starts/stops/pauses the
+  recogniser and forwards each transcript. Browser-only by nature, and degrades to "unsupported"
+  where there is no `AudioContext`/WebAssembly. See "Voice input".
 - `storage` — the one `localStorage` seam (`read(key)` / `write(key, value)`), shared by
   `rating` and `settings` so the fallible steps to reach it — and the `get_item`/`set_item`
   that can itself fail — are not open-coded twice. The `window().local_storage()` handle is
@@ -409,9 +416,9 @@ sixth — in a separate `mobile` Playwright *project* on a phone viewport,
 `e2e/mobile.spec.js` — that a **touch** drag draws an arrow and the page does not scroll
 at all (see "Mobile" above); and a seventh — `e2e/voice.spec.js` (two cases) — that a spoken
 line streams move-by-move onto the board and either a spoken command *or a pause past the
-silence threshold* submits it, driven through a **fake `webkitSpeechRecognition`** stubbed in
-before load (see "Voice input" for why this is possible without real recognition in headless
-chromium). Shared e2e utilities
+silence threshold* submits it, driven through a **fake `window.Vosk`** stubbed in before load
+(see "Voice input" for why this is possible without a real recogniser in headless chromium).
+Shared e2e utilities
 (`collectErrors`, the board/drag constants) live in `e2e/helpers.js` so the specs cannot
 drift on what a page error or a drag budget is.
 
@@ -762,8 +769,8 @@ illegal) stops the stream there and speaks the question on the final. There is *
 read-back** of a drawn move (repeating each move aloud was found to be noise; the arrow is the
 feedback).
 
-**Voice input — built.** Speech recognition (`webkitSpeechRecognition`) → spoken move →
-arrow. The hard, bug-prone half, so its brain lives in pure, heavily tested modules
+**Voice input — built.** Offline speech recognition (**Vosk**, grammar-constrained) → spoken
+move → arrow. The hard, bug-prone half, so its brain lives in pure, heavily tested modules
 (`diction` in core, `session::interpret` in web) and the browser only feeds it strings.
 
 `crates/blindfold-core/src/diction.rs` — two stages, split on purpose:
@@ -810,27 +817,53 @@ The browser half (built):
   mate; a dual that diverges misresolves and falls out as a spoken "try again", never a
   wrong arrow. Pinned by `tests/session.rs`'s voice cases (resolve-to-an-arrow, command
   pass-through, forward-play to a later move, ambiguity-asks-which, castle, end-of-line).
-- `blindfold-web` `recognition` wraps `webkitSpeechRecognition` via a small `inline_js`
-  block — *not* `web-sys`, whose recognition types are gated behind the
-  `web_sys_unstable_apis` cfg (a build flag on trunk/CI we avoid). It is **Chrome / Edge /
-  Android Chrome / iOS Safari 14.5+**, *not* Firefox; needs **mic permission**, **internet**
-  (Chrome streams audio to Google), and a **gesture to start**. `is_supported()` gates the
-  mic control so it is simply absent where recognition is not — including headless CI
-  chromium, which has no recognition service. Degrades to nothing like `speech` does.
+- `blindfold-web` `recognition` wraps **Vosk** (a Kaldi recogniser compiled to WebAssembly)
+  via a small `inline_js` block that loads the library, unpacks the model, and pumps mic audio
+  through it (getUserMedia → AudioContext → ScriptProcessor → `KaldiRecognizer.acceptWaveform`).
+  It is **any browser with a microphone, an `AudioContext`, and WebAssembly** — Chrome, Edge,
+  Firefox, Safari alike, *not* Chromium-only as `webkitSpeechRecognition` was; needs **mic
+  permission** and a **gesture to start**, but **no internet** (recognition is fully local) and
+  no per-vendor speech service. The catch is a one-time ~41 MB model + ~6 MB library, fetched
+  same-origin from `dist/vosk/` on first arm (see the "Vosk assets" note below). `is_supported()`
+  gates the mic control so it is simply absent where the primitives are missing. Degrades to
+  nothing like `speech` does.
+- **The grammar is why Vosk beats the browser recogniser.** `webkitSpeechRecognition` streamed
+  audio to Google's general-purpose model and ignored the Web Speech grammar API, so it could not
+  be told "expect chess" — it returned "rugby" for "rook b", "rookie" for "rook e", "9" for a bare
+  rank. Vosk is handed a `GRAMMAR` (a fixed word list — the roles, files a-h, number words, the
+  command words, plus `[unk]`) and can *only* emit words in it, collapsing the everyday-word
+  mishears to nothing. The list is kept in lockstep with `diction`'s homophone tables: `diction`
+  still does the fuzzy structural mapping, the grammar just bounds the alphabet. (The small
+  model's vocabulary has no "kingside"/"queenside", so castling is spoken "castle short"/"castle
+  long"; the list was trimmed to what the model actually knows to silence its unknown-word
+  warnings.)
+- **The Vosk assets, and how they ship.** The model and library are deliberately *not* committed
+  (41 MB + 6 MB; `.gitignore`d). `fetch-vosk.sh`, run as a Trunk **`post_build` hook**
+  (`Trunk.toml`), downloads them into a persistent cache (`~/.cache/blindfold-vosk`, so repeated
+  builds fetch once) and copies them into the staged `dist/vosk/`. It writes to
+  `$TRUNK_STAGING_DIR` (via `cygpath -u` on Windows), **not** the final `dist/`, because Trunk
+  applies staging *after* the hook — a write to `dist/` would be discarded. Served same-origin
+  because a cross-origin fetch of the model fails CORS: the GitHub Release asset it comes from
+  (`releases/download/vosk-model-en-small/…`) sends no `access-control-allow-origin`, and Pages
+  cannot add one. `VOSK_SKIP=1` skips the whole hook — set for CI's e2e (which stubs the
+  recogniser and needs no real assets) and for local e2e runs; the deploy build does *not* skip
+  and caches the download across runs (see `deploy.yml`). **This is why Pages works at all:**
+  Vosk needs no `SharedArrayBuffer`/COOP-COEP (verified), so a plain static host with no custom
+  headers serves it.
 - **The echo guard — deafen, don't just ignore.** With the mic on, the recogniser hears the
   app's own read-aloud (a confirmation, a question, the roster, the verdict) and would
   re-parse it as a move — a feedback loop that draws a spurious arrow. `speech::say`
   therefore **pauses the recogniser** (`recognition::pause`) before speaking and resumes it
-  (`recognition::resume`) on the utterance's `end`/`error`. Genuinely stopping it — not
-  dropping transcripts inside an estimated time window, the old approach — is the robust
-  version: nothing is heard to mishear, and there is no duration to estimate. Centralising it
-  in `say` (the single choke point for *all* TTS) covers every echo source at once. Two
-  subtleties: `cancel()` runs *before* `pause()`, so a cancelled utterance's late `end` sees
-  the new one speaking and does not un-deafen mid-sentence; and `resume` is guarded on
-  `!speaking() && !pending()`, so a rapid re-`say` (roster then verdict) does not un-deafen
-  between the two. Safe against over-pausing because the flow is turn-based (the user waits
-  for the app to finish). A no-op when the mic is off. **Not e2e-testable** (no recognition
-  service in headless chromium).
+  (`recognition::resume`) on the utterance's `end`/`error`. With Vosk this is literal: `pause`
+  flips a flag that stops feeding audio buffers to `acceptWaveform` (the graph stays up, so
+  `resume` just un-gates it), so nothing is heard to mishear and there is no time window to
+  estimate. Centralising it in `say` (the single choke point for *all* TTS) covers every echo
+  source at once. Two subtleties: `cancel()` runs *before* `pause()`, so a cancelled utterance's
+  late `end` sees the new one speaking and does not un-deafen mid-sentence; and `resume` is
+  guarded on `!speaking() && !pending()`, so a rapid re-`say` (roster then verdict) does not
+  un-deafen between the two. Safe against over-pausing because the flow is turn-based (the user
+  waits for the app to finish). A no-op when the mic is off. **Not e2e-testable** (the pause
+  gating happens below the transcript seam the fake recogniser feeds).
 - `app` wiring: the record button (in the line panel, shown only when supported) toggles
   listening. **Arming does not read the roster** — turning on the mic must not, on its own,
   start talking (the user's call); the roster is read only by the `Output` auto-read or the
@@ -845,17 +878,21 @@ The browser half (built):
   and the arming tap is the required gesture. Submit still runs the same `judge`, so the
   assembled arrows are verified against
   *all* defenses exactly as drawn ones are. **The browser flow *is* e2e-tested, despite there
-  being no real recognition in headless chromium** — `e2e/voice.spec.js` stubs a fake
-  `webkitSpeechRecognition` (both the `webkit` and the un-prefixed name — headless chromium
-  ships a native audio-less one the feature check would otherwise prefer) before load, then
-  fires the exact `(transcript, is_final)` events the real recogniser would. It streams a
-  pinned puzzle's whole line as growing interims (asserting each move draws confirm-on-next),
-  then a single final carrying "submit" (asserting the last move settles, the command fires,
-  and the mate reveals). The fake feeds strings, so the real `recognition` →
+  being no real recogniser in headless chromium** — `e2e/voice.spec.js` stubs `window.Vosk`
+  (a `createModel` that yields a `KaldiRecognizer` capturing itself as `window.__rec`) before
+  load; `recognition` finds it already on `window.Vosk` and skips the network entirely, then
+  runs its *real* audio-graph setup against it (getUserMedia/AudioContext/ScriptProcessor are
+  genuine in headless — the `--use-fake-{ui,device}-for-media-stream` chromium args in
+  `playwright.config.js` grant the mic and feed a fake device; only the recogniser itself is
+  faked). The test then fires the exact `result`/`partialresult` events the real recogniser
+  would. It streams a pinned puzzle's whole line as growing interims (asserting each move draws
+  confirm-on-next), then a single final carrying "submit" (asserting the last move settles, the
+  command fires, and the mate reveals); a second case stays silent past the timeout and asserts
+  the pause alone submits. The fake feeds strings, so the real `recognition` →
   `session::interpret` → `handle_voice` wiring runs unchanged. This is the same fake-recogniser
-  trick the `speech` output test cannot use (speechSynthesis has no seam), and it retires the
-  old "no way to feed it audio" claim: you feed it *transcripts*, not audio. The decision logic
-  is still covered natively (`diction`, `session::interpret`).
+  trick the `speech` output test cannot use (speechSynthesis has no seam): you feed it
+  *transcripts*, not audio. The decision logic is still covered natively (`diction`,
+  `session::interpret`).
 
 ### Arrows are coloured per move, and duplicates fan apart
 

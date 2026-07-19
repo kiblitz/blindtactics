@@ -3,3 +3,8 @@
 # what a regeneration produces — harmless for `of_jsonl`, which trims each line, but
 # it makes "did regenerating change anything?" impossible to answer by hashing.
 *.jsonl text eol=lf
+
+# Shell scripts are run by bash (fetch-vosk.sh, a Trunk build hook). A CRLF checkout on
+# Windows leaves stray `\r`s that break the shebang and trailing-token parsing, so keep
+# them LF regardless of the platform's autocrlf.
+*.sh text eol=lf

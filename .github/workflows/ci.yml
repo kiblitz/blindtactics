@@ -45,6 +45,11 @@ jobs:
   e2e:
     name: browser reveal test
     runs-on: ubuntu-latest
+    # The voice spec stubs the recogniser (window.Vosk), so the real ~41 MB Vosk model and
+    # library are never used in the browser — skip the fetch-vosk download in every build
+    # this job runs (the explicit bundle build and the Playwright webServer's own build).
+    env:
+      VOSK_SKIP: "1"
     steps:
       - uses: actions/checkout@v7
 

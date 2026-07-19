@@ -1,136 +1,203 @@
 //! Speech recognition — the input half of voice mode's browser plumbing.
 //!
-//! A thin wrapper over the browser's `webkitSpeechRecognition`, the mirror image of
-//! [`crate::speech`]: that one hands finished strings *to* the browser, this one takes
-//! heard strings *from* it. All the interpretation — turning a transcript into a move
-//! or a command — is [`blindfold_core::diction`] and [`crate::session::interpret`], so
-//! this module only starts and stops the recogniser and forwards each transcript to a
+//! Runs **Vosk** (a Kaldi recogniser compiled to WebAssembly) fully in the browser, the
+//! mirror image of [`crate::speech`]: that one hands finished strings *to* the browser,
+//! this one takes heard strings *from* it. All the interpretation — turning a transcript
+//! into a move or a command — is [`blindfold_core::diction`] and [`crate::session::interpret`],
+//! so this module only starts and stops the recogniser and forwards each transcript to a
 //! Rust callback.
 //!
-//! **Interim results are on**, so the callback fires as the user is still speaking
-//! (with `is_final == false`) and again when the phrase settles (`is_final == true`).
-//! That is what lets the board *stream* the move — draw a provisional arrow as the
-//! words arrive — and commit it only when final. The caller decides; this module just
-//! forwards both.
+//! # Why Vosk rather than the browser's own recogniser
+//!
+//! Chrome's `webkitSpeechRecognition` streams audio to Google's *general-purpose* model
+//! and — crucially — ignores the Web Speech grammar API, so it cannot be told "expect
+//! chess." It confidently returns "rugby" for "rook b" and "rookie" for "rook e". Vosk
+//! takes a **grammar** (a fixed word list, [`GRAMMAR`]) and can only ever emit words in
+//! it, so the whole class of everyday-word mishears disappears — and the audio never
+//! leaves the machine. This is the same engine Lichess uses for its voice input.
+//!
+//! The cost is a one-time model download (~41 MB) plus a ~6 MB library, both served
+//! **same-origin** from `dist/vosk/` (see `fetch-vosk.sh`) and lazy-loaded only when the
+//! mic is first armed. A returning visitor pays nothing (browser cache).
+//!
+//! # Streaming
+//!
+//! Vosk emits `partialresult` events as the user speaks (forwarded with `is_final == false`)
+//! and a `result` event when a phrase settles (`is_final == true`) — the same shape the old
+//! wrapper produced, so the streaming commit loop in [`crate::app`] is unchanged.
 //!
 //! **The mic is paused, not just ignored, while the app speaks.** With the mic on, the
-//! recogniser would otherwise hear the app's own text-to-speech and re-parse it as a
-//! move — an echo that draws a spurious arrow. [`pause`] stops the recogniser (and
-//! remembers it should resume); [`crate::speech::say`] calls it before speaking and
-//! [`resume`] when the utterance ends. Genuinely stopping it, rather than dropping
-//! transcripts inside a time window, is the robust version: nothing is heard to
-//! mishear.
+//! recogniser would otherwise hear the app's own text-to-speech and re-parse it as a move.
+//! [`pause`] stops feeding it audio (and remembers to resume); [`crate::speech::say`] calls
+//! it before speaking and [`resume`] when the utterance ends.
 //!
-//! Why `inline_js` rather than `web-sys`: the recognition types in `web-sys` are gated
-//! behind the `web_sys_unstable_apis` cfg (the recognition half of the Web Speech API
-//! is not a finished standard), which would push a build flag onto `trunk` and CI. A
-//! couple dozen lines of JS keep the browser quirks — the `webkit` prefix, the lazy
-//! voice list, the auto-restart on silence — in one legible place and off the build.
-//!
-//! Like `speech`, everything degrades to "not available": a browser without recognition
-//! (Firefox, or anywhere offline — Chrome streams audio to Google) simply reports
-//! unsupported and the mic control stays hidden.
+//! Everything degrades to "not available": a browser with no microphone access or no
+//! `AudioContext` reports unsupported and the mic control stays hidden.
 
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(inline_js = r#"
-// The active recognition object, or null. `_wantListening` is the *desired* state —
-// whether the user has the mic armed — kept apart from whether it is running right now,
-// because the app pauses the running recogniser for its own speech without the user
-// having turned anything off. `_paused` is that pause; `onend` restarts only when we
-// want to listen and are not paused.
-let _recognition = null;
+// Same-origin asset paths (see fetch-vosk.sh / Trunk.toml). Relative, so they resolve
+// against the page whether it is served from a project subpath or a custom domain root.
+const VOSK_JS = "vosk/vosk.js";
+const MODEL_URL = "vosk/model.tar.gz";
+
+// The recognition grammar: the *only* words Vosk may emit. Everything a move or command
+// can contain, plus "[unk]" so silence and off-vocabulary noise become an ignored token
+// rather than a phantom chess word. Kept in lockstep with `diction`'s homophone tables —
+// diction still does the fuzzy mapping (number words to ranks, "night" to knight), this
+// just bounds what can arrive.
+const GRAMMAR = JSON.stringify([
+  "king", "queen", "rook", "bishop", "knight", "pawn",
+  "a", "b", "c", "d", "e", "f", "g", "h",
+  "one", "two", "three", "four", "five", "six", "seven", "eight",
+  // Castling: the small model's vocabulary has no "kingside"/"queenside", so those are said
+  // as "castle short" / "castle long" (which `diction` maps to the sides), or a bare
+  // "castle" that the app asks to disambiguate.
+  "castle", "short", "long",
+  "takes", "check", "mate", "promote", "to",
+  "submit", "undo", "clear", "next", "back", "repeat", "done", "enter", "go", "resign",
+  "[unk]",
+]);
+
+// The loaded model, kept across start/stop so it is downloaded and unpacked only once.
+let _model = null;
+let _modelLoading = null;
+
+// The live recognition graph, torn down on stop.
+let _recognizer = null;
+let _audioContext = null;
+let _source = null;
+let _processor = null;
+let _stream = null;
+
+// Desired vs actual, mirroring the old wrapper: `_wantListening` is whether the user has
+// the mic armed; `_paused` is a transient stop for the app's own speech. Audio is fed only
+// when we want to listen and are not paused.
+let _onTranscript = null;
 let _wantListening = false;
 let _paused = false;
-let _onTranscript = null;
 
 export function bft_recognition_supported() {
-  return typeof (window.SpeechRecognition || window.webkitSpeechRecognition) !== "undefined";
+  // Vosk needs a microphone, an AudioContext, and WebAssembly. This is true on Chrome,
+  // Edge, Firefox, and Safari alike — unlike the old webkitSpeechRecognition, which was
+  // Chromium-only. A stubbed `window.Vosk` (the e2e fake) also counts as supported.
+  const hasMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  const hasAudio = typeof (window.AudioContext || window.webkitAudioContext) !== "undefined";
+  const hasWasm = typeof WebAssembly !== "undefined";
+  return (hasMedia && hasAudio && hasWasm) || typeof window.Vosk !== "undefined";
 }
 
-function bft_make() {
-  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!Recognition) return null;
-  const recognition = new Recognition();
-  recognition.lang = "en-US";
-  // continuous = true: the user is not made to pause between moves. Chrome then batches a
-  // whole spoken line into its results and finalises late, so we forward the *entire*
-  // accumulated transcript on every event (below) and let the Rust side segment it into
-  // moves and stream them — see `diction::parse_line` and `app::handle_voice`.
-  recognition.continuous = true;
-  // Interim results let the board preview a move as it is spoken and let earlier moves in
-  // a line commit before the line is finished.
-  recognition.interimResults = true;
-  // Forward the full transcript so far — every result concatenated — not just the newest
-  // slice. The parser wants the whole line ("queen f5 queen g6") to segment it; is_final
-  // is true only once *every* result has settled, i.e. the whole utterance is done.
-  recognition.onresult = (event) => {
-    if (!_onTranscript) return;
-    let full = "";
-    let allFinal = true;
-    for (let i = 0; i < event.results.length; i++) {
-      full += event.results[i][0].transcript + " ";
-      if (!event.results[i].isFinal) allFinal = false;
-    }
-    _onTranscript(full.trim(), allFinal);
+// Inject the Vosk library once and resolve to the global it defines. If something already
+// set `window.Vosk` (the e2e stub), use it and skip the network entirely.
+function bft_load_vosk_lib() {
+  if (window.Vosk) return Promise.resolve(window.Vosk);
+  if (window.__bft_vosk_lib) return window.__bft_vosk_lib;
+  window.__bft_vosk_lib = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = VOSK_JS;
+    script.onload = () => (window.Vosk ? resolve(window.Vosk) : reject(new Error("vosk lib loaded but no global")));
+    script.onerror = () => reject(new Error("failed to load " + VOSK_JS));
+    document.head.appendChild(script);
+  });
+  return window.__bft_vosk_lib;
+}
+
+// Load and unpack the model once (~41 MB, cached by the browser afterward).
+function bft_ensure_model() {
+  if (_model) return Promise.resolve(_model);
+  if (_modelLoading) return _modelLoading;
+  _modelLoading = bft_load_vosk_lib()
+    .then((Vosk) => {
+      console.log("recognition: loading speech model (first time only)...");
+      return Vosk.createModel(MODEL_URL);
+    })
+    .then((model) => {
+      _model = model;
+      console.log("recognition: model ready");
+      return model;
+    });
+  return _modelLoading;
+}
+
+async function bft_start_internal() {
+  const model = await bft_ensure_model();
+  // The mic may have been turned off while the model was still loading.
+  if (!_wantListening) return;
+
+  _stream = await navigator.mediaDevices.getUserMedia({
+    video: false,
+    audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
+  });
+  if (!_wantListening) { bft_stop_audio(); return; }
+
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  _audioContext = new AudioCtx();
+  // Vosk resamples to the model's 16 kHz internally, so it must be told the *actual*
+  // sample rate of the buffers we feed it — the context's rate, not a requested one.
+  _recognizer = new model.KaldiRecognizer(_audioContext.sampleRate, GRAMMAR);
+  _recognizer.on("result", (message) => {
+    const text = message && message.result && message.result.text;
+    if (_onTranscript && text) _onTranscript(text, true);
+  });
+  _recognizer.on("partialresult", (message) => {
+    const partial = message && message.result && message.result.partial;
+    if (_onTranscript && partial) _onTranscript(partial, false);
+  });
+
+  _source = _audioContext.createMediaStreamSource(_stream);
+  _processor = _audioContext.createScriptProcessor(4096, 1, 1);
+  _processor.onaudioprocess = (event) => {
+    // Skip while paused (the app is speaking) so the recogniser never hears its own TTS.
+    if (_recognizer && !_paused) _recognizer.acceptWaveform(event.inputBuffer);
   };
-  // The recogniser stops itself after a long enough silence. While we still want to
-  // listen and are not deliberately paused (for the app's own speech), start it again —
-  // so a session outlives the pause after the user finishes a line and stays hands-free
-  // rather than dying at the first silence.
-  recognition.onend = () => {
-    if (_recognition === recognition) {
-      _recognition = null;
-      if (_wantListening && !_paused) bft_start_internal();
-    }
-  };
-  return recognition;
+  // A ScriptProcessor only fires while connected to the destination; route through a
+  // muted gain node so the mic is not echoed back to the speakers.
+  const mute = _audioContext.createGain();
+  mute.gain.value = 0;
+  _source.connect(_processor);
+  _processor.connect(mute);
+  mute.connect(_audioContext.destination);
 }
 
-function bft_start_internal() {
-  const recognition = bft_make();
-  if (!recognition) return false;
-  _recognition = recognition;
-  try { recognition.start(); } catch (_) { _recognition = null; return false; }
-  return true;
-}
-
-function bft_stop_current() {
-  const recognition = _recognition;
-  _recognition = null;
-  if (recognition) {
-    recognition.onend = null;
-    try { recognition.stop(); } catch (_) {}
-  }
+function bft_stop_audio() {
+  if (_processor) { _processor.onaudioprocess = null; try { _processor.disconnect(); } catch (_) {} _processor = null; }
+  if (_source) { try { _source.disconnect(); } catch (_) {} _source = null; }
+  if (_recognizer) { try { _recognizer.remove(); } catch (_) {} _recognizer = null; }
+  if (_audioContext) { try { _audioContext.close(); } catch (_) {} _audioContext = null; }
+  if (_stream) { _stream.getTracks().forEach((t) => t.stop()); _stream = null; }
 }
 
 export function bft_recognition_start(onTranscript) {
   _onTranscript = onTranscript;
   _wantListening = true;
   _paused = false;
-  bft_stop_current();
-  return bft_start_internal();
+  bft_stop_audio();
+  bft_start_internal().catch((err) => {
+    console.log("recognition: could not start —", err && err.message ? err.message : err);
+    _wantListening = false;
+    bft_stop_audio();
+  });
+  // Optimistic: the graph comes up asynchronously (permission prompt, first-time model
+  // download). Returning true keeps the control armed; a real failure logs and disarms.
+  return true;
 }
 
 export function bft_recognition_stop() {
   _wantListening = false;
   _paused = false;
-  bft_stop_current();
+  bft_stop_audio();
 }
 
-// Pause for the app's own speech: stop the recogniser but keep `_wantListening`, so
-// `onend` will not restart it until `resume`. A no-op when the mic is off.
+// Pause for the app's own speech: stop feeding audio but keep `_wantListening`, so the
+// graph stays up and [`resume`] just un-gates it. A no-op when the mic is off.
 export function bft_recognition_pause() {
   if (!_wantListening || _paused) return;
   _paused = true;
-  bft_stop_current();
 }
 
 export function bft_recognition_resume() {
-  if (_wantListening && _paused) {
-    _paused = false;
-    bft_start_internal();
-  }
+  if (_wantListening && _paused) _paused = false;
 }
 "#)]
 extern "C" {
@@ -146,54 +213,52 @@ extern "C" {
     fn resume_js();
 }
 
-/// Whether this browser can do speech recognition at all — Chrome / Edge / Android
-/// Chrome / iOS Safari 14.5+, not Firefox. The app hides the mic control when this is
-/// `false`, so the feature is simply absent rather than a button that does nothing.
+/// Whether this browser can do speech recognition at all — needs a microphone, an
+/// `AudioContext`, and WebAssembly, which every current browser has. The app hides the mic
+/// control when this is `false`, so the feature is simply absent rather than a button that
+/// does nothing.
 pub fn is_supported() -> bool {
     supported_js()
 }
 
 /// Start listening, forwarding each transcript to `on_transcript` as
-/// `(transcript, is_final)`. Interim (`is_final == false`) transcripts arrive as the
-/// user is still speaking; the same phrase arrives again `is_final == true` once it
-/// settles. Returns whether it started — `false` if recognition is unsupported or the
-/// browser refused (no mic permission, no gesture). Idempotent: starting again replaces
-/// any prior session, so a re-toggle does not stack recognisers.
+/// `(transcript, is_final)`. Interim (`is_final == false`) transcripts arrive as the user
+/// is still speaking; the same phrase arrives again `is_final == true` once it settles.
+/// Returns whether it *began* starting — the graph then comes up asynchronously (the
+/// browser prompts for mic permission, and the first call downloads the ~41 MB model), so
+/// `true` here is optimistic; a genuine failure logs to the console and disarms itself.
+/// Idempotent: starting again replaces any prior session.
 ///
-/// The callback is leaked (`Closure::forget`) rather than returned for the caller to
-/// keep alive: it must outlive every `onresult` the browser fires, which continues
-/// across the auto-restart on silence and across a [`pause`]/[`resume`] for the app's
-/// speech, for the whole listening session. One leaked closure per start is a rounding
-/// error against a toggle a user presses a handful of times.
+/// The callback is leaked (`Closure::forget`) rather than returned for the caller to keep
+/// alive: it must outlive every recognition event for the whole listening session. One
+/// leaked closure per start is a rounding error against a toggle a user presses a handful
+/// of times.
 pub fn start(on_transcript: impl FnMut(String, bool) + 'static) -> bool {
     let closure = Closure::new(on_transcript);
-    if start_js(&closure) {
-        closure.forget();
-        true
-    } else {
-        // Unsupported or refused: the browser never took a reference to the closure, so
-        // dropping it here frees it rather than leaking.
-        false
-    }
+    let started = start_js(&closure);
+    // The JS side holds the callback for the session's lifetime, so keep it alive.
+    closure.forget();
+    started
 }
 
-/// Stop listening for good. Safe to call when not listening — a no-op then.
+/// Stop listening for good and tear down the audio graph (the model stays cached). Safe to
+/// call when not listening — a no-op then.
 pub fn stop() {
     stop_js();
 }
 
 /// Pause the recogniser while the app speaks, remembering it should resume.
 ///
-/// Called by [`crate::speech::say`] before it speaks, so the recogniser does not hear
-/// its own text-to-speech and re-parse it as a move. Unlike [`stop`], this keeps the
-/// "we want to listen" intent, so [`resume`] can bring it straight back. A no-op when
+/// Called by [`crate::speech::say`] before it speaks, so the recogniser does not hear its
+/// own text-to-speech and re-parse it as a move. Unlike [`stop`], this keeps the graph up
+/// and the "we want to listen" intent, so [`resume`] brings it straight back. A no-op when
 /// the mic is off.
 pub fn pause() {
     pause_js();
 }
 
-/// Resume a mic paused by [`pause`]. Called when the app's utterance ends. A no-op if
-/// the mic is off or was not paused.
+/// Resume a mic paused by [`pause`]. Called when the app's utterance ends. A no-op if the
+/// mic is off or was not paused.
 pub fn resume() {
     resume_js();
 }

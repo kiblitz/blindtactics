@@ -2,3 +2,12 @@
 # GitHub Pages serves a project site from a subdirectory, so absolute asset paths
 # would 404. Relative ones work there and from `file://` alike.
 public_url = "./"
+
+# Pull the offline speech assets (Vosk library + model) into dist/vosk after every
+# build, so they are served *same-origin* with the app (see fetch-vosk.sh for why that
+# is required, and .gitignore — dist/ is not committed). CI's e2e sets VOSK_SKIP=1 to
+# avoid the ~41 MB download; it stubs the recogniser instead.
+[[hooks]]
+stage = "post_build"
+command = "bash"
+command_arguments = ["fetch-vosk.sh"]

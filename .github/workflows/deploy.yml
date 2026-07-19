@@ -54,6 +54,16 @@ jobs:
           curl -fsSL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
             | tar -xzf - -C "$HOME/.cargo/bin"
 
+      # The release build runs the fetch-vosk post_build hook, which downloads the ~41 MB
+      # offline speech model and the Vosk library into dist/vosk (served same-origin — see
+      # fetch-vosk.sh). Cache them across runs so a deploy re-downloads only when the pinned
+      # URLs in the script change; the hook already skips the fetch when the cache is warm.
+      - name: Cache Vosk assets
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/blindfold-vosk
+          key: vosk-${{ hashFiles('crates/blindfold-web/fetch-vosk.sh') }}
+
       # Trunk.toml sets public_url = "./", so the bundle's asset links are relative and
       # serve correctly both from a project subpath (`user.github.io/repo/`) and from a
       # custom domain's root. Output lands in crates/blindfold-web/dist.

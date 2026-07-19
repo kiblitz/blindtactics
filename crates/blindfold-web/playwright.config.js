@@ -39,7 +39,16 @@ module.exports = defineConfig({
     {
       name: "chromium",
       testMatch: /(reveal|voice)\.spec\.js/,
-      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 1280 } },
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1280, height: 1280 },
+        // The voice spec's real recognition graph calls getUserMedia; these grant the mic
+        // and feed a fake audio device so it resolves in headless (the recogniser itself is
+        // stubbed via window.Vosk, so the fake audio is never actually transcribed).
+        launchOptions: {
+          args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"],
+        },
+      },
     },
     // A phone: a narrow viewport with touch, so the mobile spec exercises the
     // responsive layout and real touch-type pointer input. Explicit chromium options
@@ -66,5 +75,8 @@ module.exports = defineConfig({
     url: ORIGIN,
     timeout: 360_000,
     reuseExistingServer: !process.env.CI,
+    // The voice spec stubs the recogniser (window.Vosk), so the real ~41 MB model and the
+    // library are never fetched — tell the build's fetch-vosk hook to skip the download.
+    env: { ...process.env, VOSK_SKIP: "1" },
   },
 });

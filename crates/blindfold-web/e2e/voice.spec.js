@@ -14,28 +14,31 @@ const { collectErrors } = require("./helpers");
 // native test can reach. The decision logic is covered natively (`diction`,
 // `session::interpret`); this covers the reactive glue around it.
 
-// A fake SpeechRecognition: records every instance so the test can fire transcripts on
-// the live one. start/stop are no-ops (nothing to actually listen to); the app assigns
-// onresult/onend, exactly as it does to the real object.
-const FAKE_RECOGNITION = `
-window.__rec = [];
-function FakeRecognition() {
-  this.lang = ""; this.continuous = false; this.interimResults = false;
-  this.onresult = null; this.onend = null; this.onerror = null;
-  this.start = () => { window.__rec.push(this); };
-  this.stop = () => { if (this.onend) this.onend(); };
-}
-// Stub both names — headless Chromium ships a native window.SpeechRecognition that the
-// app's feature check prefers, so overriding only the webkit name would leave the real
-// (audio-less) recogniser in place and nothing would ever fire.
-window.SpeechRecognition = FakeRecognition;
-window.webkitSpeechRecognition = FakeRecognition;`;
+// A fake Vosk: `window.Vosk` with a createModel that yields a KaldiRecognizer capturing
+// itself as `window.__rec`, so the test can fire recognition events on the live one. The
+// real `recognition` module finds this stub already on `window.Vosk` and skips the network
+// (no 41 MB model, no library download) — then runs its true audio-graph setup against it.
+// getUserMedia/AudioContext/ScriptProcessor are real in headless (see the fake-media launch
+// args in playwright.config.js), so only the recogniser itself is stubbed.
+const FAKE_VOSK = `
+window.__rec = null;
+window.Vosk = {
+  createModel: async () => ({
+    KaldiRecognizer: function (sampleRate, grammar) {
+      this._handlers = {};
+      this.on = (event, cb) => { this._handlers[event] = cb; };
+      this.acceptWaveform = () => {};
+      this.remove = () => {};
+      window.__rec = this;
+    },
+  }),
+};`;
 
-// Pin the random puzzle and install the fake recogniser, both before first load. The
-// app picks its puzzle with Math.random and reads the recognition constructor at mount,
-// so both overrides must be in place before `goto`.
+// Pin the random puzzle and install the fake Vosk, both before first load. The app picks
+// its puzzle with Math.random and reads window.Vosk when the mic is armed, so both
+// overrides must be in place before `goto`.
 async function pinAndFake(page, seed) {
-  await page.addInitScript(FAKE_RECOGNITION);
+  await page.addInitScript(FAKE_VOSK);
   await page.addInitScript((s) => {
     Math.random = () => s;
     try {
@@ -119,18 +122,27 @@ async function setSilence(page, secs) {
   );
 }
 
-// Fire one transcript on the live fake recogniser, as the browser's onresult would.
+// Fire one transcript on the live fake recogniser, as Vosk would: a partialresult while
+// speaking (is_final == false) or a result once settled (is_final == true).
 async function fire(page, transcript, isFinal) {
   await page.evaluate(
     ({ t, f }) => {
-      const inst = window.__rec[window.__rec.length - 1];
-      if (!inst || !inst.onresult) throw new Error("no live recognition instance");
-      const result = [{ transcript: t }];
-      result.isFinal = f;
-      inst.onresult({ results: [result], resultIndex: 0 });
+      const rec = window.__rec;
+      if (!rec) throw new Error("no live recognizer");
+      if (f) rec._handlers.result?.({ result: { text: t } });
+      else rec._handlers.partialresult?.({ result: { partial: t } });
     },
     { t: transcript, f: isFinal }
   );
+}
+
+// Arm the mic and wait for the (async) recognition graph to come up — the recogniser is
+// created after the model "loads" and getUserMedia resolves, so `window.__rec` appears a
+// tick after the click.
+async function armMic(page) {
+  await page.getByRole("button", { name: "Voice input" }).click();
+  await expect(page.locator(".button--recording")).toHaveCount(1);
+  await page.waitForFunction(() => !!window.__rec);
 }
 
 // Whether a UCI carries a promotion piece (its 5th character).
@@ -161,9 +173,7 @@ test("a spoken line streams each move onto the board, then a voice command submi
 
   const spoken = await spokenLine(page, line);
 
-  // Arm the mic (present only where recognition is supported — the fake reports yes).
-  await page.getByRole("button", { name: "Voice input" }).click();
-  await expect(page.locator(".button--recording")).toHaveCount(1);
+  await armMic(page);
 
   // Stream the line the way a continuous recogniser delivers it in one breath: each move
   // arrives as a growing interim, so the *previous* complete move commits while the newest
@@ -209,8 +219,7 @@ test("a pause past the silence threshold submits the spoken line", async ({ page
   const { line } = await currentSolution(page, solutions);
   const spoken = await spokenLine(page, line);
 
-  await page.getByRole("button", { name: "Voice input" }).click();
-  await expect(page.locator(".button--recording")).toHaveCount(1);
+  await armMic(page);
 
   // Speak the whole line as growing interims — no final, no spoken command. Every move
   // but the last commits; the last is the held preview ghost.
