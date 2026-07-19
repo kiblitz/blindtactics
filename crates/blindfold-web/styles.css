@@ -236,14 +236,60 @@ body {
   gap: 1.1rem;
 }
 
+/* A passthrough on desktop: the board is laid out as a direct child of
+ * `.layout__board`, full width. On a phone the frame becomes a size container that
+ * sizes the board to fit (see the mobile block). */
+.board-frame {
+  display: contents;
+}
+
 @media (max-width: 840px) {
-  /* One column, and the roster is hoisted out of the panel stack to sit above the
-   * board and pin to the top — so a blindfold solver reads the piece locations while
-   * drawing, instead of scrolling between them. `display: contents` drops the panel
-   * wrapper's box so its two regions become direct grid items that `order` can place
-   * around the board. */
+  /* A fixed, full-height app shell: the page itself never scrolls. The core loop —
+   * read the pinned roster, draw on the board, submit — fits one screen, and the
+   * board flexes to fill the height left between the roster on top and the controls
+   * below. Only the roster and the drawn-line list scroll, each inside its own capped
+   * region; the page never does. */
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .app {
+    height: 100dvh;
+    max-width: none;
+    margin: 0;
+    padding: 0.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  /* Marketing copy and footer are noise on a phone that is here to solve — dropping
+   * them is what frees the vertical room for a full-size board. */
+  .masthead,
+  .colophon {
+    display: none;
+  }
+
+  .statusbar {
+    margin: 0;
+    padding-bottom: 0.5rem;
+  }
+
+  /* The layout fills the space under the rating bar and stacks in one column: the
+   * roster hoisted to the top, the board in the middle taking the slack, the line
+   * below. `display: contents` drops the panel wrapper so its two regions become flex
+   * siblings of the board that `order` can place. */
   .layout {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
+    /* Reset the desktop grid's `align-items: start`: in this column it would leave
+     * each region at its content width instead of filling the phone's width. */
+    align-items: stretch;
+    flex: 1;
+    min-height: 0;
+    gap: 0.5rem;
   }
 
   .layout__panels {
@@ -252,34 +298,83 @@ body {
 
   .layout__roster {
     order: 1;
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 32%;
+    overflow-y: auto;
   }
 
   .layout__board {
     order: 2;
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
   }
 
   .layout__line {
     order: 3;
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 40%;
   }
 
-  /* Pinned to the top of the viewport and kept short, so it stays visible over a
-   * full-size board below. Height-capped with its own scroll so a long roster never
-   * buries the board; the panel's opaque background plus a soft edge read as board
-   * content passing behind it. */
-  .layout__roster {
-    position: sticky;
-    top: 0;
-    z-index: 5;
-    max-height: 40vh;
+  /* The board fills the slack between roster and line while staying square. Its frame
+   * is a size container, so the board takes the smaller of the frame's width and
+   * height (`cqmin`) — shrinking on a short screen instead of forcing a page scroll. */
+  .board-frame {
+    display: grid;
+    place-items: center;
+    flex: 1 1 auto;
+    min-height: 0;
+    container-type: size;
+  }
+
+  .board-frame .board {
+    width: 100cqmin;
+    height: 100cqmin;
+  }
+
+  /* The puzzle id under the board is a bug-report aid, not worth vertical space here. */
+  .layout__board .facts {
+    display: none;
+  }
+
+  /* Keep the controls and verdict on screen while the drawn line / move list scrolls
+   * inside the panel — so Submit and the reveal stepper never need a page scroll. */
+  .layout__line .panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    max-height: 100%;
+  }
+
+  .layout__line .panel__title {
+    margin-bottom: 0.4rem;
+  }
+
+  .layout__line .line,
+  .layout__line .movelist {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
-    box-shadow: 0 0.4rem 0.8rem -0.4rem rgba(0, 0, 0, 0.55);
   }
 
-  /* Compact the pinned roster: the "Roster" label is redundant when the roster *is*
-   * the thing on screen, and each side's pieces flow into a wrapping row rather than
-   * a tall column of one entry per line. */
+  .layout__line .controls {
+    margin-top: 0.5rem;
+  }
+
+  .layout__line .verdict {
+    margin-top: 0.4rem;
+  }
+
+  /* The roster sits at the top of the fixed shell — always on screen without a pin —
+   * and is compacted: the "Roster" label is redundant when the roster *is* what is on
+   * screen, and each side's pieces flow into a wrapping row rather than a tall column
+   * of one entry per line, so it stays a thin strip over a full-size board. */
   .layout__roster .panel {
-    padding: 0.7rem 0.9rem;
+    padding: 0.6rem 0.8rem;
   }
 
   .layout__roster .panel__title {
@@ -287,7 +382,7 @@ body {
   }
 
   .layout__roster .panel__tomove {
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.4rem;
     font-size: 0.95rem;
   }
 
@@ -299,7 +394,7 @@ body {
   }
 
   .layout__roster .side + .side {
-    margin-top: 0.5rem;
+    margin-top: 0.4rem;
   }
 
   /* The side's name sits on its own line; its entries wrap beneath it. */
@@ -318,8 +413,8 @@ body {
   }
 
   .layout__roster .entry__piece {
-    width: 1.25rem;
-    height: 1.25rem;
+    width: 1.2rem;
+    height: 1.2rem;
   }
 }
 

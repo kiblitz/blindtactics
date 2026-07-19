@@ -218,26 +218,33 @@ pub fn App() -> impl IntoView {
                         on_flip=Callback::new(flip)
                         on_choose_pov=Callback::new(choose_pov)
                     />
-                    {move || {
-                        // Rebuilt when the puzzle, the POV, or the flip changes — a
-                        // fresh board without the last render's in-progress drag. The
-                        // `puzzle.track()` is load-bearing beyond the orientation read:
-                        // two puzzles can resolve to the *same* orientation, and
-                        // without it the board would carry the previous drag into the
-                        // next puzzle. `track`, not `get`: subscribe without cloning.
-                        puzzle.track();
-                        let side = settings::facing(pov.get(), solver.get(), flipped.get());
-                        view! {
-                            <board::Board
-                                orientation=square::Orientation(side)
-                                drawn=drawn
-                                on_draw=Callback::new(draw)
-                                revealed=revealed
-                                highlight=highlight
-                                locked=locked
-                            />
-                        }
-                    }}
+                    // A frame around the board so it can be a size container on a
+                    // phone: the board then fills the smaller of the frame's width and
+                    // height, shrinking to fit the space the fixed-height mobile shell
+                    // leaves it rather than forcing a scroll. On desktop the frame is
+                    // `display: contents` — a passthrough that changes nothing.
+                    <div class="board-frame">
+                        {move || {
+                            // Rebuilt when the puzzle, the POV, or the flip changes — a
+                            // fresh board without the last render's in-progress drag. The
+                            // `puzzle.track()` is load-bearing beyond the orientation read:
+                            // two puzzles can resolve to the *same* orientation, and
+                            // without it the board would carry the previous drag into the
+                            // next puzzle. `track`, not `get`: subscribe without cloning.
+                            puzzle.track();
+                            let side = settings::facing(pov.get(), solver.get(), flipped.get());
+                            view! {
+                                <board::Board
+                                    orientation=square::Orientation(side)
+                                    drawn=drawn
+                                    on_draw=Callback::new(draw)
+                                    revealed=revealed
+                                    highlight=highlight
+                                    locked=locked
+                                />
+                            }
+                        }}
+                    </div>
                     <Facts session=session />
                 </div>
 

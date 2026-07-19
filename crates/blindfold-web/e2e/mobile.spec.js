@@ -30,9 +30,8 @@ async function touchDrag(page, from, to) {
   await page.dispatchEvent(".board", "pointerup", init(to.x, to.y, 0));
 }
 
-// Viewport-relative geometry (getBoundingClientRect), so a scroll is reflected —
-// which `boundingBox()` alone does not make unambiguous, and the sticky-pin check
-// turns on exactly that.
+// Viewport-relative geometry (getBoundingClientRect), so a value reflects where an
+// element actually sits on screen — what the no-scroll and ordering checks turn on.
 const topOf = (page, sel) =>
   page.locator(sel).evaluate((el) => el.getBoundingClientRect().top);
 const rectOf = (page, sel) =>
@@ -41,9 +40,7 @@ const rectOf = (page, sel) =>
     return { x: r.x, y: r.y, width: r.width, height: r.height };
   });
 
-test("on a touch phone the roster pins above the board and a touch drag draws an arrow", async ({
-  page,
-}) => {
+test("on a touch phone nothing scrolls and a touch drag draws an arrow", async ({ page }) => {
   const errors = collectErrors(page);
 
   await page.goto("/");
@@ -52,14 +49,28 @@ test("on a touch phone the roster pins above the board and a touch drag draws an
   const viewport = page.viewportSize();
   expect(viewport, "a viewport size must be configured").toBeTruthy();
 
-  // On a phone the roster is hoisted *above* the board (so piece locations can be
-  // read while drawing) and the line sits below it — the reorder the layout does at
-  // this width.
-  await page.evaluate(() => window.scrollTo(0, 0));
-  const boardTop0 = await topOf(page, ".board");
-  expect(await topOf(page, ".layout__roster"), "roster is above the board").toBeLessThan(boardTop0);
+  // The whole core loop fits one screen: on a phone the layout is a fixed-height shell
+  // and the page cannot scroll at all. Try to scroll it to the bottom and confirm it
+  // did not move — the guarantee the mobile layout exists to make.
+  await page.evaluate(() => window.scrollTo(0, 100000));
+  expect(await page.evaluate(() => window.scrollY), "the page must not scroll").toBe(0);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight),
+    "the page content must not exceed the viewport height"
+  ).toBeLessThanOrEqual(1);
+
+  // The roster is hoisted *above* the board (so piece locations can be read while
+  // drawing) and the line sits below it — the reorder the layout does at this width.
+  const boardTop = await topOf(page, ".board");
+  expect(await topOf(page, ".layout__roster"), "roster is above the board").toBeLessThan(boardTop);
   expect(await topOf(page, ".layout__line"), "the line is below the board").toBeGreaterThan(
-    boardTop0
+    boardTop
+  );
+
+  // Submit is on screen without a scroll — no reaching for a control below the fold.
+  const submit = await rectOf(page, ".button--primary");
+  expect(submit.y + submit.height, "Submit is within the viewport").toBeLessThanOrEqual(
+    viewport.height + 1
   );
 
   // `touch-action: none` is set on the board — without it the browser pans the page
@@ -69,24 +80,12 @@ test("on a touch phone the roster pins above the board and a touch drag draws an
     .evaluate((el) => getComputedStyle(el).touchAction);
   expect(touchAction).toBe("none");
 
-  // Scroll until the roster pins to the top; the board then sits right below it, fully
-  // visible — the intended reading position, and the pin is a browser/layout concern a
-  // native test cannot see. (Scrolling by the roster's own top pins it with the board
-  // just beneath, rather than over-scrolling the board up under the pinned roster.)
-  const rosterTop0 = await topOf(page, ".layout__roster");
-  await page.evaluate((y) => window.scrollTo(0, y + 4), rosterTop0);
-  const rosterPinned = await topOf(page, ".layout__roster");
-  expect(rosterPinned, "the roster stays pinned near the top when scrolled").toBeGreaterThanOrEqual(
-    -1
-  );
-  expect(rosterPinned, "and does not scroll away").toBeLessThan(viewport.height * 0.5);
-
-  // The board is fully on screen below the pinned roster, so both endpoints of a drag
-  // land on a square.
+  // The board is fully on screen, so both endpoints of a drag land on a square.
   const board = await rectOf(page, ".board");
+  expect(board.y, "the board's top is on screen").toBeGreaterThanOrEqual(-1);
   expect(
     board.y + board.height,
-    "the board sits fully below the pinned roster, within the viewport"
+    "the whole board fits the viewport"
   ).toBeLessThanOrEqual(viewport.height + 1);
 
   // A touch drag between two squares draws an arrow — the core interaction on a phone.

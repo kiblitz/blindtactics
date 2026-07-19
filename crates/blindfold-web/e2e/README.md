@@ -61,11 +61,12 @@ and `mobile.spec.js` on a phone viewport with touch. `reveal.spec.js` holds six 
   first move) — all reactive concerns a native test cannot see.
 
 `mobile.spec.js` (the `mobile` project) asserts the phone-specific behaviour: at a phone
-width the roster is **hoisted above the board and pins to the top** (so the piece
-locations stay on screen while drawing) with the line below it, the roster **stays
-pinned** when the board is scrolled up, `touch-action` is `none`, the board sits fully
-below the pinned roster within the viewport, and a **touch-type pointer drag** draws an
-arrow. The reveal/step wiring is size-independent and not re-proved there.
+width the app is a fixed-height shell that **does not scroll at all** (scroll it to the
+bottom and `window.scrollY` is still 0, and content height does not exceed the viewport),
+the roster sits **above** the board with the line **below** it, **Submit and the whole
+board are within the viewport** (nothing below the fold), `touch-action` is `none`, and a
+**touch-type pointer drag** draws an arrow. The reveal/step wiring is size-independent and
+not re-proved there.
 
 The solutions come from all four committed `database/mate_in_*.jsonl` files, read
 off disk, so the test cannot drift from what the app was built with. Shared helpers
