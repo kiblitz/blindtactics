@@ -902,28 +902,13 @@ body {
   margin-top: 0.9rem;
 }
 
-/* The record control — spoken input's bottom-area button, plus the live silence
- * countdown. Its own row under the editing/reveal controls, present in both states. */
-.micbar {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-top: 0.7rem;
-}
-
-.button--record {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-}
-
-/* The status dot: neutral while idle, bright and pulsing while armed. */
-.micbar__dot {
-  width: 0.6rem;
-  height: 0.6rem;
+/* The record control — a compact circular button sitting inline with the
+ * editing/reveal buttons (a `--icon` made round), rather than a labelled bar on its
+ * own row. A mic glyph when idle; while armed, a red disc showing the silence
+ * countdown, ringed by a pulse the way a recording app signals it is live. */
+.button--mic {
   border-radius: 50%;
-  background: var(--chalk-faint);
-  flex: none;
+  font-size: 0.95rem;
 }
 
 /* Bright red while listening, in both themes (see `--rec`), so "recording" reads at a
@@ -935,25 +920,22 @@ body {
   color: #fff;
 }
 
-.button--recording .micbar__dot {
-  background: #fff;
-  animation: rec-pulse 1.1s ease-in-out infinite;
+.button--mic.button--recording {
+  animation: rec-ring 1.4s ease-out infinite;
 }
 
-@keyframes rec-pulse {
-  0%,
+/* An expanding, fading ring — the "live" pulse. On the box-shadow, not the button's
+ * opacity, so the countdown digit inside stays fully legible. */
+@keyframes rec-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--rec) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 0.55rem color-mix(in srgb, var(--rec) 0%, transparent);
+  }
   100% {
-    opacity: 1;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--rec) 0%, transparent);
   }
-  50% {
-    opacity: 0.35;
-  }
-}
-
-/* How long until the mic turns itself off — so the user is not left guessing. */
-.micbar__countdown {
-  font-size: 0.8rem;
-  color: var(--chalk-dim);
 }
 
 /* Reveal navigation, pushed left so "Next puzzle" sits at the right end. */

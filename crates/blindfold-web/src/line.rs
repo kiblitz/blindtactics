@@ -120,6 +120,43 @@ pub fn Line(
             }}
 
             <div class="controls">
+                // The record control — a compact circular button (a mic when idle, a
+                // pulsing red disc showing the silence countdown while armed), sitting
+                // inline with the editing/reveal buttons rather than on its own row.
+                // Leads the row and stays put across the editing/revealed switch, so
+                // speaking a move before a solve and "next" after one share one control.
+                // Only rendered where recognition exists, so it never appears dead.
+                {mic_supported
+                    .then(|| {
+                        view! {
+                            <button
+                                class="button button--icon button--mic"
+                                class:button--recording=move || listening.get()
+                                aria-pressed=move || listening.get().to_string()
+                                aria-label="Voice input"
+                                title=move || {
+                                    match (listening.get(), countdown.get()) {
+                                        (true, Some(secs)) => format!("Listening — {secs}s left"),
+                                        (true, None) => "Listening — tap to stop".to_string(),
+                                        (false, _) => "Speak your moves".to_string(),
+                                    }
+                                }
+                                on:click=move |_| on_toggle_mic.run(())
+                            >
+                                {move || {
+                                    match (listening.get(), countdown.get()) {
+                                        // Armed: the seconds left, counting down inside the
+                                        // disc the way a recording app's ring does.
+                                        (true, Some(secs)) => {
+                                            view! { <span class="mono">{secs}</span> }.into_any()
+                                        }
+                                        (true, None) => view! { "●" }.into_any(),
+                                        (false, _) => view! { "🎤" }.into_any(),
+                                    }
+                                }}
+                            </button>
+                        }
+                    })}
                 {move || {
                     if revealed.get() {
                         // Revealed: walk the mating line back and forth, Lichess
@@ -185,48 +222,6 @@ pub fn Line(
                     }
                 }}
             </div>
-
-            // The record control — the bottom-area button for spoken input. Outside the
-            // editing/revealed switch so it is available in both (saying "next" after a
-            // solve is as useful as saying a move before one). Only rendered where
-            // recognition exists, so it never appears as a control that cannot work.
-            {mic_supported
-                .then(|| {
-                    view! {
-                        <div class="micbar">
-                            <button
-                                class="button button--record"
-                                class:button--recording=move || listening.get()
-                                aria-pressed=move || listening.get().to_string()
-                                aria-label="Voice input"
-                                title=move || {
-                                    if listening.get() {
-                                        "Listening — tap to stop"
-                                    } else {
-                                        "Speak your moves"
-                                    }
-                                }
-                                on:click=move |_| on_toggle_mic.run(())
-                            >
-                                <span class="micbar__dot"></span>
-                                {move || if listening.get() { "Listening" } else { "Speak" }}
-                            </button>
-                            // The silence countdown: how long until the mic turns itself
-                            // off, so the user is not left guessing how much time is left.
-                            {move || {
-                                countdown
-                                    .get()
-                                    .map(|secs| {
-                                        view! {
-                                            <span class="micbar__countdown mono">
-                                                {format!("{secs}s")}
-                                            </span>
-                                        }
-                                    })
-                            }}
-                        </div>
-                    }
-                })}
 
             <Verdict solve=solve solver=solver />
         </section>

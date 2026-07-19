@@ -704,8 +704,10 @@ voices so `speak()` is a silent no-op, which is exactly enough to prove the wiri
 throws).
 
 The **record button, per-puzzle mic policy, silence countdown, and streaming** are the app's
-other voice wiring. The record button (in the line panel — bright red "Listening" when armed)
-toggles the mic and records the user's *intent* (`mic_desired`); a per-puzzle `Effect`
+other voice wiring. The record button is a **compact circular control inline with the
+Submit/Undo/Clear row** (`button--mic`, not its own labelled bar — a phone cannot spare the
+row): a 🎤 glyph when idle, a pulsing red disc showing the live silence countdown when armed.
+It toggles the mic and records the user's *intent* (`mic_desired`); a per-puzzle `Effect`
 re-arms from `Input::arms_next(mic_desired)` on each new puzzle — `Draw` resets to off, `Speak`
 carries the last state. While listening, a countdown (`silence_secs`, a stepper setting) runs
 on a 1-second interval, reset by every heard phrase; at zero it turns the mic off — but does
