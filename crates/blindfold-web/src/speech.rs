@@ -1,11 +1,10 @@
 //! Text to speech — the output half of the voice mode.
 //!
 //! A thin wrapper over the browser's `speechSynthesis` so the rest of the app reads
-//! aloud by calling [`say`] and never touches `web_sys` directly. There is nothing
-//! here with a right answer — *what* to say (the roster sentence, the verdict) is
-//! built in [`blindfold_core::roster`] and [`crate::session`], the seams a native
-//! test can reach. This module only hands a finished string to the browser and picks
-//! the voice it is read in.
+//! aloud by calling [`say`] and never touches `web_sys` directly. This module also
+//! holds the app's *opinion* about which voice to read in — see [`voice_score`]. That
+//! opinion is deliberately not a user setting: a picker would push the platform's
+//! quirks onto the user, when the app can just choose well.
 //!
 //! Everything degrades to silence rather than an error: a browser with no speech
 //! synthesis, or one that refuses to speak before the first user gesture, simply
@@ -27,9 +26,8 @@ pub fn say(text: &str) {
     let Ok(utterance) = web_sys::SpeechSynthesisUtterance::new_with_text(text) else {
         return;
     };
-    // A chosen English voice, so the reading is not the platform's robotic default
-    // (Windows' SAPI "David"/"Zira", say). None → leave the browser's default, which is
-    // still better than not speaking.
+    // A chosen voice, so the reading is not the platform's robotic or novelty default.
+    // `None` → leave the browser default, which is still better than not speaking.
     if let Some(voice) = best_voice(&synthesis) {
         utterance.set_voice(Some(&voice));
     }
@@ -44,28 +42,29 @@ pub fn silence() {
     }
 }
 
-/// The best available English voice, or `None` to fall back to the browser default.
+/// Nudge the browser to load its voice list.
 ///
-/// "Best" is a heuristic over the voice *name*, because that is the only quality
-/// signal the API exposes: the natural / neural voices (Microsoft's "Natural",
-/// Google's, Apple's "Enhanced") name themselves, and the old robotic desktop voices
-/// are known by name too. Only English voices are considered — a French voice reading
-/// English is worse than the default — so where none is English this returns `None`.
-///
-/// The voice list can be empty on the first call (some browsers load it
-/// asynchronously), which simply yields the default until the next announcement; since
-/// announcements follow user gestures, by then it is populated.
+/// Some browsers (Chrome, Android) populate `getVoices()` asynchronously and return an
+/// empty list until they do. Calling it once at startup starts that load, so by the
+/// time the user enables sound the good voice is already known — otherwise the *first*
+/// announcement falls back to the default and only later ones get the chosen voice.
+pub fn warm() {
+    if let Some(synthesis) = synthesis() {
+        let _ = synthesis.get_voices();
+    }
+}
+
+/// The best available voice by the app's opinion ([`voice_score`]), or `None` to fall
+/// back to the browser default (no English voice, or the list not yet loaded).
 fn best_voice(synthesis: &web_sys::SpeechSynthesis) -> Option<web_sys::SpeechSynthesisVoice> {
     let mut best: Option<(i32, web_sys::SpeechSynthesisVoice)> = None;
     for entry in synthesis.get_voices().iter() {
         let Ok(voice) = entry.dyn_into::<web_sys::SpeechSynthesisVoice>() else {
             continue;
         };
-        let lang = voice.lang().to_ascii_lowercase();
-        if !lang.starts_with("en") {
+        let Some(score) = voice_score(&voice.name(), &voice.voice_uri(), &voice.lang()) else {
             continue;
-        }
-        let score = quality(&voice.name().to_ascii_lowercase(), &lang);
+        };
         if best.as_ref().is_none_or(|(top, _)| score > *top) {
             best = Some((score, voice));
         }
@@ -73,41 +72,149 @@ fn best_voice(synthesis: &web_sys::SpeechSynthesis) -> Option<web_sys::SpeechSyn
     best.map(|(_, voice)| voice)
 }
 
-/// Score an English voice by name, higher being more natural. Tuned to prefer the
-/// neural/online voices and gently demote the known robotic desktop ones; the exact
-/// numbers only have to order voices on one device, not mean anything absolute.
-fn quality(name: &str, lang: &str) -> i32 {
+/// The app's opinion of a voice, higher being better; `None` for one it will not use.
+///
+/// Pure string logic over the three things the API exposes — name, `voiceURI`, and
+/// BCP-47 `lang` — so it is native-tested (`tests/speech.rs`) rather than left to a
+/// browser. The signals, tuned for **Apple and Android**, the two platforms that
+/// matter here:
+///
+/// - **Tier lives in the `voiceURI`**, not the name. Apple spells it out
+///   (`com.apple.voice.premium.en-US.Ava`, `…enhanced…`, `…compact…`), so the neural
+///   tiers win and the low-quality `compact` one is ranked last but still kept (on an
+///   iPhone with nothing downloaded it may be the *only* Samantha there is).
+/// - **Android's good voices are the Google-named ones** (`Google US English`), which
+///   are neural; `google` in the name is a strong signal.
+/// - **Novelty and legacy voices are excluded** — the joke voices (`Zarvox`, `Bells`,
+///   the newer `Rocko`/`Reed`/`Sandy` gimmicks) and the ancient robotic ones (`Fred`,
+///   `Albert`) are English and would otherwise score, so they return `None`.
+/// - **English only.** A French voice reading English coordinates is worse than the
+///   default, so non-`en` langs are skipped; US English is preferred since the wording
+///   assumes it.
+pub fn voice_score(name: &str, voice_uri: &str, lang: &str) -> Option<i32> {
+    let lang = lang.to_ascii_lowercase();
+    if !lang.starts_with("en") {
+        return None;
+    }
+    let name = name.to_ascii_lowercase();
+    let uri = voice_uri.to_ascii_lowercase();
+
+    // Joke / novelty / ancient voices — matched on the exact persona name, since these
+    // are all real English voices a substring test on quality keywords would miss.
+    const NOVELTY: &[&str] = &[
+        "albert",
+        "bad news",
+        "bahh",
+        "bells",
+        "boing",
+        "bubbles",
+        "cellos",
+        "good news",
+        "jester",
+        "organ",
+        "pipe organ",
+        "trinoids",
+        "whisper",
+        "wobble",
+        "zarvox",
+        "deranged",
+        "hysterical",
+        "superstar",
+        "fred",
+        "ralph",
+        "kathy",
+        "junior",
+        "princess",
+        "bruce",
+        "agnes",
+        "vicki",
+        "victoria",
+        "grandma",
+        "grandpa",
+        "rocko",
+        "sandy",
+        "shelley",
+        "flo",
+        "reed",
+        "eddy",
+    ];
+    if NOVELTY.contains(&name.as_str()) {
+        return None;
+    }
+    // Robotic engines, whatever persona name they wear.
+    if name.contains("eloquence") || uri.contains("eloquence") || uri.contains("espeak") {
+        return None;
+    }
+
+    let has = |needle: &str| name.contains(needle) || uri.contains(needle);
     let mut score = 0;
-    // The natural/neural families, best first.
-    if name.contains("natural") || name.contains("neural") {
+
+    // Language variant: the wording assumes US English, then British, then any English.
+    score += if lang.starts_with("en-us") {
+        6
+    } else if lang.starts_with("en-gb") {
+        3
+    } else {
+        1
+    };
+
+    // Neural / premium tiers — the big wins, and cross-platform.
+    if has("neural") || has("natural") {
         score += 60;
     }
-    if name.contains("enhanced") || name.contains("premium") {
+    if has("premium") {
         score += 55;
     }
-    if name.contains("siri") {
+    if has("siri") {
+        score += 55;
+    }
+    if has("enhanced") {
         score += 50;
     }
-    if name.contains("google") {
-        score += 45;
+    if has("google") {
+        score += 50;
     }
-    // Nicer online Microsoft voices, named for the person.
-    for good in ["aria", "jenny", "guy", "libby", "sonia", "natasha", "ryan"] {
-        if name.contains(good) {
-            score += 25;
-        }
+
+    // Modern, natural-sounding Apple personas — good even at the default tier, so a name
+    // match earns a lift on top of any tier the URI reveals.
+    const APPLE_GOOD: &[&str] = &[
+        "ava",
+        "samantha",
+        "allison",
+        "susan",
+        "zoe",
+        "nicky",
+        "evan",
+        "nathan",
+        "joelle",
+        "noelle",
+        "daniel",
+        "kate",
+        "serena",
+        "stephanie",
+        "oliver",
+        "martha",
+        "karen",
+        "matilda",
+        "moira",
+        "tessa",
+        "fiona",
+        "rishi",
+        "gordon",
+    ];
+    if APPLE_GOOD.iter().any(|persona| name.starts_with(persona)) {
+        score += 25;
     }
-    // The robotic bundled desktop voices — usable, but a last resort.
-    for robotic in ["david", "zira", "mark", "hazel", "desktop", "espeak"] {
-        if name.contains(robotic) {
-            score -= 15;
-        }
+    if name.starts_with("ava") {
+        score += 12; // Apple's most natural US voice.
     }
-    // A slight lean toward US English, the variant the wording assumes.
-    if lang == "en-us" {
-        score += 2;
+
+    // The low-quality on-device tier: kept as a last resort, ranked below anything neural.
+    if has("compact") {
+        score -= 25;
     }
-    score
+
+    Some(score)
 }
 
 /// The browser's speech-synthesis handle, or `None` where there is none — an old

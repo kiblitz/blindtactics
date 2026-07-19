@@ -32,6 +32,9 @@ pub fn App() -> impl IntoView {
     // needs a user gesture to start (the enabling click), and a page that talks on
     // load would be a surprise. The announcement effects below read this.
     let sound = RwSignal::new(settings::load_sound());
+    // Start the browser loading its voice list now, so a good voice is chosen from the
+    // very first announcement rather than after it (some browsers load voices async).
+    speech::warm();
 
     // The whole attempt in one signal, so its reset invariant lives in one place a
     // native test can reach — see `session::Attempt`.

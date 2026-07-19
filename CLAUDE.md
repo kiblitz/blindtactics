@@ -614,12 +614,26 @@ default. When on:
   sibling of the panel's `Verdict`, reusing `explain` so the voice and the screen cannot
   say different things, and holding the same discretion (never the move count, so no depth
   leak).
-- The **voice is chosen, not the platform default** — `speech::best_voice` scores the
-  available English voices by name (the only quality signal the API gives) to prefer the
-  natural/neural families (Microsoft "Natural", Google, Apple "Enhanced") over the robotic
-  bundled desktop voices (Windows SAPI "David"/"Zira"), which otherwise read the puzzle in
-  a jarring monotone. `None` (no English voice, or the list not yet loaded) falls back to
-  the browser default. This is a heuristic that only has to order voices on one device.
+- The **voice is chosen, not the platform default, and this is an opinion rather than a
+  setting** (the user's call: "we should just have an opinion for others to use" — no voice
+  picker, no sliders). `speech::voice_score(name, uri, lang)` is *pure string logic* over
+  the three things the API exposes, so the opinion is native-tested in `tests/speech.rs`
+  rather than left to a browser. Tuned for **Apple and Android**, the platforms that matter:
+  - **The quality tier lives in the `voiceURI`, not the name.** Apple spells it out —
+    `com.apple.voice.premium.en-US.Ava`, `…enhanced…`, `…compact…` — so the neural tiers win
+    and the poor `compact` tier is ranked last but *kept* (on an iPhone with nothing
+    downloaded it may be the only Samantha there is; excluding it would just fall back to the
+    same voice). This is the signal my first cut missed — it scored Windows *names*
+    (David/Zira), which mean nothing on a phone.
+  - **Android's good voices are the Google-named ones** (`Google US English`, neural).
+  - **Novelty and legacy voices are excluded outright** (`None`): the joke voices (`Zarvox`,
+    `Bells`, the newer `Rocko`/`Reed`/`Sandy` gimmicks) and ancient robotic ones (`Fred`,
+    `Albert`) are real English voices that would otherwise score, and `espeak`/`eloquence`
+    engines whatever persona they wear.
+  - **English only**, US preferred (the wording assumes it); a non-`en` voice reading
+    coordinates is worse than the default. `None` overall → browser default.
+  - `speech::warm()` is called at app mount to start the async voice load (Chrome/Android
+    populate `getVoices()` lazily), so the *first* announcement already has the good voice.
 
 Two `Effect`s in `app` do the announcing: one subscribes to `position` (fires on load and
 every `next`), one to `solve` (fires when a verdict appears, not on a reveal step). Both
