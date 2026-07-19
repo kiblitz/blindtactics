@@ -134,6 +134,19 @@ pub const SPEECH_RATE: f32 = 0.9;
 /// (`1.0`, range `0.0`–`2.0`). Slightly lowered for a calmer, less bright tone.
 pub const SPEECH_PITCH: f32 = 0.9;
 
+/// How long the recogniser ignores its own input while the app is speaking, estimated
+/// from the utterance: a per-character term plus a fixed tail.
+///
+/// With the mic listening, the recogniser hears the app's text-to-speech and would
+/// re-parse it as a move — an echo loop. `speech::say` suppresses recognition for the
+/// utterance's estimated duration so that echo is dropped. The per-character figure is
+/// tuned to the [`SPEECH_RATE`] read (~80 ms/char at 0.9×); the tail covers the lag
+/// between the audio ending and the recogniser finalising the transcript it heard, so
+/// the echo lands inside the window rather than just after it. Over-estimating only
+/// extends the pause during which the user is listening anyway, so it errs long.
+pub const SPEECH_ECHO_MS_PER_CHAR: f64 = 80.0;
+pub const SPEECH_ECHO_BUFFER_MS: f64 = 700.0;
+
 /// How many of the closest-rated puzzles the next one is drawn from.
 ///
 /// Selection is "random, near your rating": the candidates are the

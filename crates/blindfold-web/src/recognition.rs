@@ -21,9 +21,18 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(inline_js = r#"
 let _recognition = null;
+// While the app is speaking, the recogniser hears its own text-to-speech and would
+// re-parse it as input — an echo that could draw a spurious move. Transcripts finalised
+// before this time (set whenever the app speaks) are dropped. Turn-based UX means the
+// user is not talking while the app talks, so this cannot swallow real input.
+let _suppressUntil = 0;
 
 export function bft_recognition_supported() {
   return typeof (window.SpeechRecognition || window.webkitSpeechRecognition) !== "undefined";
+}
+
+export function bft_recognition_suppress(ms) {
+  _suppressUntil = Date.now() + ms;
 }
 
 export function bft_recognition_start(onTranscript) {
@@ -35,6 +44,7 @@ export function bft_recognition_start(onTranscript) {
   recognition.continuous = true;
   recognition.interimResults = false;
   recognition.onresult = (event) => {
+    if (Date.now() < _suppressUntil) return;
     for (let i = event.resultIndex; i < event.results.length; i++) {
       const result = event.results[i];
       if (result.isFinal) onTranscript(result[0].transcript);
@@ -64,6 +74,8 @@ export function bft_recognition_stop() {
 extern "C" {
     #[wasm_bindgen(js_name = bft_recognition_supported)]
     fn supported_js() -> bool;
+    #[wasm_bindgen(js_name = bft_recognition_suppress)]
+    fn suppress_js(ms: f64);
     #[wasm_bindgen(js_name = bft_recognition_start)]
     fn start_js(on_transcript: &Closure<dyn FnMut(String)>) -> bool;
     #[wasm_bindgen(js_name = bft_recognition_stop)]
@@ -102,4 +114,14 @@ pub fn start(on_transcript: impl FnMut(String) + 'static) -> bool {
 /// Stop listening. Safe to call when not listening — a no-op then.
 pub fn stop() {
     stop_js();
+}
+
+/// Ignore any transcript finalised within the next `ms` milliseconds.
+///
+/// Called by [`crate::speech::say`] whenever the app speaks, so the recogniser does not
+/// hear its own text-to-speech and re-parse it as a move. A no-op when not listening
+/// (it only sets a timestamp the running recogniser consults). The flow is turn-based —
+/// the user waits for the app to finish speaking — so this cannot swallow real input.
+pub fn suppress(ms: f64) {
+    suppress_js(ms);
 }

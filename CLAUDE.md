@@ -737,6 +737,18 @@ The browser half (built):
   (Chrome streams audio to Google), and a **gesture to start**. `is_supported()` gates the
   mic control so it is simply absent where recognition is not — including headless CI
   chromium, which has no recognition service. Degrades to nothing like `speech` does.
+- **The echo guard.** With the mic on, the recogniser hears the app's own read-aloud
+  (a confirmation, a question, the roster, the verdict) and would re-parse it as a move —
+  a feedback loop that draws a spurious arrow. `speech::say` therefore calls
+  `recognition::suppress(ms)` for the utterance's estimated duration
+  (`SPEECH_ECHO_MS_PER_CHAR * len + SPEECH_ECHO_BUFFER_MS`), and the recogniser drops any
+  transcript finalised inside that window. Centralising it in `say` — the single choke
+  point for *all* TTS — covers every echo source at once, and it is safe against
+  over-suppression because the flow is turn-based: the user waits for the app to finish
+  speaking, so no real input falls in the window. The tail buffer exists because the
+  recogniser finalises a heard phrase slightly *after* the audio ends, so the window must
+  outlast the utterance. A no-op when the mic is off. **Not e2e-testable** for the same
+  reason the rest of the flow is not (no recognition service in headless chromium).
 - `app` wiring: a mic button in `BoardBar` (shown only when supported) toggles listening;
   enabling reads the roster aloud (that tap is the gesture browsers demand before speech).
   Each final transcript goes to `interpret`, and the result drives the **same action

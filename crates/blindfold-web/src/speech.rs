@@ -12,6 +12,7 @@
 //! over a UI that already works without it.
 
 use crate::constants;
+use crate::recognition;
 use wasm_bindgen::JsCast as _;
 
 /// Speak `text` aloud, cancelling whatever was being said first.
@@ -23,6 +24,12 @@ pub fn say(text: &str) {
     let Some(synthesis) = synthesis() else {
         return;
     };
+    // Deafen the recogniser for the length of this utterance, so voice mode does not hear
+    // its own read-aloud and re-parse it as input. Estimated from the text, and harmless
+    // when the mic is off. Set before `speak` so the window opens as the audio begins.
+    recognition::suppress(
+        text.len() as f64 * constants::SPEECH_ECHO_MS_PER_CHAR + constants::SPEECH_ECHO_BUFFER_MS,
+    );
     synthesis.cancel();
     let Ok(utterance) = web_sys::SpeechSynthesisUtterance::new_with_text(text) else {
         return;
