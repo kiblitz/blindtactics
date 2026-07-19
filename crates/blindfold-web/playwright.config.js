@@ -38,7 +38,7 @@ module.exports = defineConfig({
   projects: [
     {
       name: "chromium",
-      testMatch: /reveal\.spec\.js/,
+      testMatch: /(reveal|voice)\.spec\.js/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 1280 } },
     },
     // A phone: a narrow viewport with touch, so the mobile spec exercises the

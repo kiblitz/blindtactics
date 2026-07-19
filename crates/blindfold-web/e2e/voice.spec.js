@@ -1,0 +1,177 @@
+// @ts-check
+const { test, expect } = require("@playwright/test");
+const fs = require("node:fs");
+const path = require("node:path");
+const { collectErrors } = require("./helpers");
+
+// Voice input's streaming path — the hardest thing in the project to test, and the
+// one CLAUDE.md long said was *not* e2e-testable ("headless chromium has no speech
+// recognition, so there is no way to feed it audio"). That is true of the *real*
+// recogniser, but the app talks to it only through `webkitSpeechRecognition`, so a
+// fake one stubbed in before load lets us drive the whole browser flow — segment a
+// spoken line into moves, stream each onto the board, and fire a final command — the
+// exact wiring (`recognition` → `session::interpret` → `app::handle_voice`) that no
+// native test can reach. The decision logic is covered natively (`diction`,
+// `session::interpret`); this covers the reactive glue around it.
+
+// A fake SpeechRecognition: records every instance so the test can fire transcripts on
+// the live one. start/stop are no-ops (nothing to actually listen to); the app assigns
+// onresult/onend, exactly as it does to the real object.
+const FAKE_RECOGNITION = `
+window.__rec = [];
+function FakeRecognition() {
+  this.lang = ""; this.continuous = false; this.interimResults = false;
+  this.onresult = null; this.onend = null; this.onerror = null;
+  this.start = () => { window.__rec.push(this); };
+  this.stop = () => { if (this.onend) this.onend(); };
+}
+// Stub both names — headless Chromium ships a native window.SpeechRecognition that the
+// app's feature check prefers, so overriding only the webkit name would leave the real
+// (audio-less) recogniser in place and nothing would ever fire.
+window.SpeechRecognition = FakeRecognition;
+window.webkitSpeechRecognition = FakeRecognition;`;
+
+// Pin the random puzzle and install the fake recogniser, both before first load. The
+// app picks its puzzle with Math.random and reads the recognition constructor at mount,
+// so both overrides must be in place before `goto`.
+async function pinAndFake(page, seed) {
+  await page.addInitScript(FAKE_RECOGNITION);
+  await page.addInitScript((s) => {
+    Math.random = () => s;
+    try {
+      window.localStorage.clear();
+    } catch (e) {
+      // Storage can be unavailable (private mode); the default rating still makes
+      // selection deterministic.
+    }
+  }, seed);
+}
+
+// Every committed puzzle, keyed by id → solution — the same JSONL the app compiles in.
+function solutionsById() {
+  const byId = new Map();
+  for (const depth of [1, 2, 3, 4]) {
+    const file = path.join(__dirname, "..", "..", "..", "database", `mate_in_${depth}.jsonl`);
+    for (const row of fs.readFileSync(file, "utf8").split("\n")) {
+      if (!row.trim()) continue;
+      const puzzle = JSON.parse(row);
+      byId.set(puzzle.id, puzzle.solution);
+    }
+  }
+  return byId;
+}
+
+// The puzzle on screen, read from its own `.facts` line — never assume an ordering.
+async function currentSolution(page, solutions) {
+  const id = ((await page.locator(".facts").textContent()) ?? "").replace(/^#/, "").trim();
+  const line = solutions.get(id);
+  expect(line, `puzzle ${id} must be in the committed database`).toBeTruthy();
+  return { id, line };
+}
+
+const PROMO = { q: "queen", r: "rook", b: "bishop", n: "knight" };
+
+// Turn a solution (a list of UCI moves) into the words a user would speak: each move as
+// "<role> <dest>", with a promotion suffix spoken after the destination ("g1 queen").
+//
+// The role must be read from the *evolving* position, not the initial roster: move 2's
+// from-square only holds a piece after move 1 plays. So the roster is read once into a
+// square→role map, then walked forward move by move — otherwise a later move whose piece
+// arrived mid-line would be spoken as a bare pawn move and mis-segment.
+async function spokenLine(page, solution) {
+  const roleAt = await page.evaluate(() => {
+    const map = {};
+    for (const entry of document.querySelectorAll(".entry")) {
+      const role = entry.querySelector(".entry__piece")?.getAttribute("aria-label") ?? "";
+      const squares = entry.querySelector(".entry__squares")?.textContent ?? "";
+      for (const sq of squares.trim().split(/\s+/)) if (sq) map[sq] = role;
+    }
+    return map;
+  });
+
+  const spoken = [];
+  for (const uci of solution) {
+    const from = uci.slice(0, 2);
+    const to = uci.slice(2, 4);
+    const role = roleAt[from] ?? "";
+    const promo = uci[4] ? ` ${PROMO[uci[4]]}` : "";
+    spoken.push(`${role} ${to}${promo}`.trim());
+    // Advance the tracked position so the next move reads the right piece.
+    delete roleAt[from];
+    roleAt[to] = uci[4] ? PROMO[uci[4]] : role;
+  }
+  return spoken;
+}
+
+// Fire one transcript on the live fake recogniser, as the browser's onresult would.
+async function fire(page, transcript, isFinal) {
+  await page.evaluate(
+    ({ t, f }) => {
+      const inst = window.__rec[window.__rec.length - 1];
+      if (!inst || !inst.onresult) throw new Error("no live recognition instance");
+      const result = [{ transcript: t }];
+      result.isFinal = f;
+      inst.onresult({ results: [result], resultIndex: 0 });
+    },
+    { t: transcript, f: isFinal }
+  );
+}
+
+// Whether a UCI carries a promotion piece (its 5th character).
+function hasPromotion(uci) {
+  return Boolean(uci[4]);
+}
+
+// Seed 0.95 selects a mate-in-3 whose line promotes (f3g2, g2g1=Q, g1g3): a single
+// case that walks every hard part of the streaming path at once — several moves in one
+// breath, a mid-line promotion (the "g1 queen queen g3" segmentation that must not read
+// the promotion as the next mover), and a spoken command to finish. Reads whichever
+// puzzle the seed lands on and asserts it really promotes, so a database regeneration
+// that stopped selecting a promotion puzzle fails loudly rather than silently dropping
+// the coverage.
+test("a spoken line streams each move onto the board, then a voice command submits", async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+  const solutions = solutionsById();
+
+  await pinAndFake(page, 0.95);
+  await page.goto("/");
+  await expect(page.locator(".board")).toBeVisible();
+
+  const { line } = await currentSolution(page, solutions);
+  expect(line.length, "the streaming case needs a multi-move line").toBeGreaterThan(1);
+  expect(line.some(hasPromotion), "seed 0.95 must select a puzzle whose line promotes").toBe(true);
+
+  const spoken = await spokenLine(page, line);
+
+  // Arm the mic (present only where recognition is supported — the fake reports yes).
+  await page.getByRole("button", { name: "Voice input" }).click();
+  await expect(page.locator(".button--recording")).toHaveCount(1);
+
+  // Stream the line the way a continuous recogniser delivers it in one breath: each move
+  // arrives as a growing interim, so the *previous* complete move commits while the newest
+  // is still held as a preview (confirm-on-next). After speaking move i (0-based), i moves
+  // are drawn and move i is the ghost.
+  const steps = page.locator(".line__step");
+  for (let i = 0; i < spoken.length; i++) {
+    await fire(page, spoken.slice(0, i + 1).join(" "), false);
+    await expect(steps).toHaveCount(i, { timeout: 2000 });
+  }
+
+  // Close the same breath with a single final that also carries the command: "…​ submit".
+  // The final settles the last held move *and* fires the command — the whole line then
+  // plays out through the same judge a drawn submit runs, and the correct mate reveals the
+  // board. (One utterance, so no `just_finalized` reset is in play — the fragile
+  // speak-pause-speak-again path is deliberately not what a hands-free solver does.)
+  //
+  // On reveal the line panel swaps its drawn-arrow steps for the SAN move list, so
+  // `.line__step` vanishes; the reveal itself is the assertion. A wrong or short line
+  // would not reveal, leaving the steps in place and this failing loudly.
+  await fire(page, `${spoken.join(" ")} submit`, true);
+  await expect(page.locator(".board--revealed")).toHaveCount(1);
+  await expect(page.locator(".verdict")).toContainText("Mate");
+  await expect(page.locator(".movelist__ply")).toHaveCount(spoken.length * 2 - 1);
+
+  expect(errors).toEqual([]);
+});

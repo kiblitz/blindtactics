@@ -154,9 +154,9 @@ blindfold-chess-trainer/
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 9 cases —
-  the reveal test runs on two pinned puzzles, and a `mobile` project runs a
-  touch spec on a phone viewport), clippy clean. Blank board,
+- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 10 cases —
+  the reveal test runs on two pinned puzzles, a `voice` spec drives a fake recogniser,
+  and a `mobile` project runs a touch spec on a phone viewport), clippy clean. Blank board,
   drag-drawn numbered arrows each in its own colour, roster panel with real piece
   artwork (and a speak button), a per-move promotion control, a hover highlight, a board
   flip and a settings menu (point of view, plus voice mode's input/output modes and a
@@ -253,10 +253,11 @@ offline curation tool and the live app (so the DB and the app cannot disagree ab
 - `mate` — `judge` (does this line mate against every defense?), `playback` (the plies the
   UI steps through on a solve), and `find_linear` / `min_depth` (search). The heart of the
   project.
-- `diction` — spoken input: `parse` (transcript → `Intent`, pure string work) and `resolve`
-  (intent + position → arrow / a question / illegal). The input half of voice mode; see
-  "Voice input" below. The most bug-prone part of the project, so it is pure core and
-  tested the hardest.
+- `diction` — spoken input: `parse` (transcript → one `Intent`, pure string work),
+  `parse_line` (transcript → a *sequence* of moves/castles/commands + a `trailing`
+  incomplete-move flag, for the streaming multi-move path) and `resolve` (intent + position →
+  arrow / a question / illegal). The input half of voice mode; see "Voice input" below. The
+  most bug-prone part of the project, so it is pure core and tested the hardest.
 - `roster` — piece locations as **structured data** (`roster::Entry { role, squares }`),
   ordered K/Q/R/B/N/P, **plus castling rights and the en-passant square**. Renders to text
   (`text`, `name`, `color_name`, `heading`) and later to speech, never a string; the *SVG*
@@ -331,19 +332,20 @@ its only consumer. That is the line; it is not "no strings in core".
   un-deafen between two utterances). Browser-only by nature, like `storage`.
 - `recognition` — the read-aloud output's mirror: speech *input*, a thin `inline_js` wrapper
   over `webkitSpeechRecognition` (`is_supported()` / `start(on_transcript)` / `stop()` /
-  `pause()` / `resume()`). **Interim results are on**, so `on_transcript(transcript,
-  is_final)` fires as the user is still speaking (streaming) and again when the phrase
-  settles. **`continuous` is off, and that is load-bearing:** with `continuous = true` Chrome
-  batches several spoken phrases into one result and finalises the whole batch only after a
-  long silence — so a single move arrives as endless interims that never commit (the app draws
-  on the *final*), and the one late final is a concatenation like `"Queen G6 Queen G5"` that
-  the one-move parser mangles into a garbled from/to. `false` finalises each phrase at its
-  natural pause (one move, one final); `onend` restarts the recogniser so a session still spans
-  a whole line, move by move. This was a real reported bug (`#6npPh`, and see the console-log
-  trail `voice: heard …`). No logic with a right answer — *what a transcript means* is
-  `session::interpret`; this only starts/stops/pauses the recogniser and forwards each
-  transcript. Browser-only by nature, and degrades to "unsupported" where there is no
-  recognition. See "Voice input".
+  `pause()` / `resume()`). **Interim results and `continuous` are both on**, so
+  `on_transcript(transcript, is_final)` fires repeatedly as the user speaks and the user is
+  never made to pause between moves. Two things this module does because of `continuous`:
+  it forwards the **full accumulated transcript** every event (all results concatenated), not
+  just the newest slice, because Chrome batches a whole spoken line and the parser wants the
+  whole thing to segment (`"queen f5 queen g6"` → two moves); and `is_final` is true only once
+  *every* result has settled (the whole utterance is done). The Rust side
+  (`diction::parse_line` + `app::handle_voice`) segments that transcript into moves and streams
+  them — draw each as the next begins, hold the last until it settles. (An earlier cut used
+  `continuous = false` to force one-move-per-final; it worked but made the user pause between
+  moves, so it was replaced by the streaming parser — do not "restore" it.) No logic with a
+  right answer — *what a transcript means* is `session::interpret` / `resolve_spoken`; this
+  only starts/stops/pauses the recogniser and forwards each transcript. Browser-only by nature,
+  and degrades to "unsupported" where there is no recognition. See "Voice input".
 - `storage` — the one `localStorage` seam (`read(key)` / `write(key, value)`), shared by
   `rating` and `settings` so the fallible steps to reach it — and the `get_item`/`set_item`
   that can itself fail — are not open-coded twice. The `window().local_storage()` handle is
@@ -398,11 +400,15 @@ non-pawn move is still enterable now that promotion is a per-move control (see "
 below); a fourth that the settings POV and the flip button actually re-orient the board
 and that the POV persists across a reload while the flip does not (see "Which way the board
 faces" below); a fifth that giving up reveals the solution as a scored loss and the SAN
-move list navigates by both click and arrow key (see "The analysis move list" above); and
-a sixth — in a separate `mobile` Playwright *project* on a phone viewport,
+move list navigates by both click and arrow key (see "The analysis move list" above); a
+sixth — in a separate `mobile` Playwright *project* on a phone viewport,
 `e2e/mobile.spec.js` — that a **touch** drag draws an arrow and the page does not scroll
-at all (see "Mobile" above). Shared e2e utilities (`collectErrors`, the board/drag constants) live in
-`e2e/helpers.js` so the two specs cannot drift on what a page error or a drag budget is.
+at all (see "Mobile" above); and a seventh — `e2e/voice.spec.js` — that a spoken line
+streams move-by-move onto the board and a spoken command submits, driven through a **fake
+`webkitSpeechRecognition`** stubbed in before load (see "Voice input" for why this is
+possible without real recognition in headless chromium). Shared e2e utilities
+(`collectErrors`, the board/drag constants) live in `e2e/helpers.js` so the specs cannot
+drift on what a page error or a drag budget is.
 
 **Two e2e traps this cost real time on, both about the *harness*, not the app.** First,
 the board is an `aspect-ratio: 1` box below the masthead, so at Playwright's default 720px
@@ -723,9 +729,24 @@ then turns the mic off** — the user speaks the whole line, stops, and the paus
 submit. It submits only when a line is drawn and the board is not already revealed (a silence
 over an empty or solved line just deafens; submitting nothing would score a loss). The
 timeout does *not* touch `mic_desired`, so a silence timeout in `Speak` mode still re-arms next
-puzzle (only the user pressing the button counts as intent). Interim transcripts stream a
-`preview` ghost arrow onto the board; a final transcript commits it — with **no spoken
-read-back** (repeating each move aloud was found to be noise; the drawn arrow is the feedback).
+puzzle (only the user pressing the button counts as intent).
+
+**The streaming multi-move parse is the heart of it.** The user is not made to speak one move
+per breath; they say a whole line ("queen f5 queen g6") and each move draws as it lands.
+`recognition` forwards the full accumulated transcript on every event; `handle_voice`
+`diction::parse_line`s it into a sequence of moves and commits them **confirm-on-next**: a
+complete move is drawn once *another* segment follows it (so the last, still-being-revised move
+is held back and shown as the `preview` ghost until it settles or the utterance finalises).
+`committed` counts how many of the current utterance's moves are already drawn so a growing
+interim only draws the new ones; `just_finalized` resets that count at the next utterance
+(a final ends one, the recogniser restarts fresh), and the per-puzzle effect resets it too (the
+line is empty again). Each move resolves against the position it is made from — the line grown
+by the moves before it — via `session::resolve_spoken` (the per-move core of `interpret`).
+Commands stream too ("queen f5 queen g6 submit"), but a command fires **only on a final** (a
+mid-utterance "submit" must not). A move that needs the user (ambiguous, needs promotion,
+illegal) stops the stream there and speaks the question on the final. There is **no spoken
+read-back** of a drawn move (repeating each move aloud was found to be noise; the arrow is the
+feedback).
 
 **Voice input — built.** Speech recognition (`webkitSpeechRecognition`) → spoken move →
 arrow. The hard, bug-prone half, so its brain lives in pure, heavily tested modules
@@ -800,18 +821,27 @@ The browser half (built):
   listening. **Arming does not read the roster** — turning on the mic must not, on its own,
   start talking (the user's call); the roster is read only by the `Output` auto-read or the
   roster speak button. The tap is still a user gesture, so it unlocks the browser's speech for
-  a later verdict. Each transcript goes to `interpret`; a **final** result drives the **same action
-  closures the buttons use** — `submit`/`undo`/`clear`/`next`/`give_up` and `draw` — while an
-  **interim** result only streams a `preview` ghost arrow (so a half-said "sub…" cannot fire
-  submit). A drawn move gets **no spoken read-back** (the arrow is the feedback); only the
+  a later verdict. Each transcript goes to `parse_line` + the streaming commit loop (see "the
+  streaming multi-move parse" above): confirmed moves `draw`, commands run the **same action
+  closures the buttons use** — `submit`/`undo`/`clear`/`next`/`give_up` — but **only on a final**
+  (a half-said "sub…" cannot fire submit), and the last, still-forming move shows as a `preview`
+  ghost. A drawn move gets **no spoken read-back** (the arrow is the feedback); only the
   voice's *questions and misses* (ambiguity, needed promotion, "try again") speak, through
   `speech` **directly, not gated on the `Output` mode** — voice mode needs its own feedback,
   and the arming tap is the required gesture. Submit still runs the same `judge`, so the
   assembled arrows are verified against
-  *all* defenses exactly as drawn ones are. **The browser flow itself is not e2e-tested** —
-  headless chromium has no speech recognition, so there is no way to feed it audio; the
-  existing suite does prove the `inline_js` module loads and `is_supported()` runs without
-  error on page load, and the decision logic is covered natively by `interpret`.
+  *all* defenses exactly as drawn ones are. **The browser flow *is* e2e-tested, despite there
+  being no real recognition in headless chromium** — `e2e/voice.spec.js` stubs a fake
+  `webkitSpeechRecognition` (both the `webkit` and the un-prefixed name — headless chromium
+  ships a native audio-less one the feature check would otherwise prefer) before load, then
+  fires the exact `(transcript, is_final)` events the real recogniser would. It streams a
+  pinned puzzle's whole line as growing interims (asserting each move draws confirm-on-next),
+  then a single final carrying "submit" (asserting the last move settles, the command fires,
+  and the mate reveals). The fake feeds strings, so the real `recognition` →
+  `session::interpret` → `handle_voice` wiring runs unchanged. This is the same fake-recogniser
+  trick the `speech` output test cannot use (speechSynthesis has no seam), and it retires the
+  old "no way to feed it audio" claim: you feed it *transcripts*, not audio. The decision logic
+  is still covered natively (`diction`, `session::interpret`).
 
 ### Arrows are coloured per move, and duplicates fan apart
 
