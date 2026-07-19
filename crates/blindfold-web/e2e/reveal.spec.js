@@ -159,6 +159,41 @@ test("the board is blind until solved, and the roster shows real piece artwork",
   expect(errors).toEqual([]);
 });
 
+// The arrowhead used to be a shared <marker>, which lives in <defs> and cannot
+// inherit the arrow's per-move colour, so every head painted the board's base amber
+// while the shaft was correctly coloured. The head is now a filled <polygon> in the
+// arrow's own group; this pins the invariant the marker broke — head colour equals
+// shaft colour — which only a browser resolves (currentColor → a concrete rgb). Any
+// drag draws a committed arrow (legality is judged only on submit), so no pinned
+// puzzle is needed.
+test("an arrow's head is painted the same colour as its shaft", async ({ page }) => {
+  const errors = collectErrors(page);
+
+  await page.goto("/");
+  const board = await page.locator(".board").boundingBox();
+  expect(board, "the board must have a box to drag on").toBeTruthy();
+  if (!board) return;
+  await assertBoardFitsViewport(page, board);
+
+  await drawArrow(page, board, "e2e4");
+
+  const shaftStroke = await page
+    .locator(".arrow line")
+    .first()
+    .evaluate((el) => getComputedStyle(el).stroke);
+  const headFill = await page
+    .locator(".arrow__head")
+    .first()
+    .evaluate((el) => getComputedStyle(el).fill);
+
+  // A resolved colour, not "none"/transparent, and the two agree — a marker-painted
+  // head would be the board's amber here, not the arrow's own colour.
+  expect(headFill).toMatch(/^rgb/);
+  expect(headFill).toBe(shaftStroke);
+
+  expect(errors).toEqual([]);
+});
+
 // The reveal is exercised on pinned puzzles rather than a random one, so a CI
 // retry re-runs the identical case (see `pinPuzzle`). The seeds are chosen against
 // the committed database's rating order (fresh rating 1200) to cover a spread

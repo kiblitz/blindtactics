@@ -251,41 +251,8 @@ fn Arrows(
 ) -> impl IntoView {
     let side = constants::VIEWBOX_SIDE;
 
-    // The arrowhead triangle, built from the marker's constants rather than spelled
-    // out, so its coordinates cannot drift from the viewBox and anchor beside it: a
-    // tip at (VIEWBOX - MARGIN, ANCHOR_Y) and a back edge down the x=0 side, inset
-    // from top and bottom by MARGIN.
-    let margin = constants::ARROW_HEAD_MARGIN;
-    let far = constants::ARROW_HEAD_VIEWBOX - margin;
-    let head_path = format!(
-        "M0,{margin} L{far},{} L0,{far} z",
-        constants::ARROW_HEAD_ANCHOR_Y
-    );
-
     view! {
         <svg class="board__arrows" viewBox=format!("0 0 {side} {side}") aria-hidden="true">
-            <defs>
-                <marker
-                    id=constants::ARROW_HEAD_ID
-                    viewBox=format!(
-                        "0 0 {} {}",
-                        constants::ARROW_HEAD_VIEWBOX,
-                        constants::ARROW_HEAD_VIEWBOX,
-                    )
-                    refX=constants::ARROW_HEAD_ANCHOR_X
-                    refY=constants::ARROW_HEAD_ANCHOR_Y
-                    markerWidth=constants::ARROW_HEAD_SCALE
-                    markerHeight=constants::ARROW_HEAD_SCALE
-                    orient="auto-start-reverse"
-                >
-                    // `context-stroke`, not a fixed fill, so the one shared marker
-                    // paints in whatever colour the arrow referencing it strokes with
-                    // — otherwise every head would take the amber inherited at the
-                    // `<defs>`, ignoring the per-arrow `style:color` below.
-                    <path d=head_path fill="context-stroke" />
-                </marker>
-            </defs>
-
             {move || {
                 let arrows = drawn.get();
                 arrows
@@ -365,6 +332,21 @@ fn Shaft(
     };
     let (hx, hy) = (x1 + dx * scale, y1 + dy * scale);
 
+    // The head is a filled triangle in this same group, not a shared marker, so it
+    // takes the arrow's per-move colour like the shaft and the badge do — see
+    // `constants::ARROW_HEAD_LENGTH`. Its base sits at the shaft's (inset) end and it
+    // points on toward the true endpoint.
+    let [tip, left, right] = square::arrowhead(
+        (hx, hy),
+        (x2, y2),
+        constants::ARROW_HEAD_LENGTH,
+        constants::ARROW_HEAD_HALF_WIDTH,
+    );
+    let head_points = format!(
+        "{},{} {},{} {},{}",
+        tip.0, tip.1, left.0, left.1, right.0, right.1,
+    );
+
     view! {
         <g class="arrow" class:arrow--ghost=number.is_none() style:color=color>
             <line
@@ -374,8 +356,8 @@ fn Shaft(
                 y2=hy
                 stroke-width=constants::ARROW_WIDTH
                 stroke-linecap="butt"
-                marker-end=format!("url(#{})", constants::ARROW_HEAD_ID)
             />
+            <polygon class="arrow__head" points=head_points />
             {number
                 .map(|n| {
                     view! {

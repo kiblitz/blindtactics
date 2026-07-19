@@ -14,11 +14,15 @@ but the same class of bug lives in the step wiring, which is what this spec driv
 ## What it checks
 
 Two specs, run as two Playwright projects: `reveal.spec.js` on a desktop viewport,
-and `mobile.spec.js` on a phone viewport with touch. `reveal.spec.js` holds five tests
+and `mobile.spec.js` on a phone viewport with touch. `reveal.spec.js` holds six tests
 (the **Solve, step, and rate** one runs on two pinned puzzles):
 
 - **Blind board.** Loads the app and confirms the board is a void with real piece
   artwork in the roster (no pieces on the board, no `board--revealed`).
+- **Arrowhead colour.** Draws one arrow and asserts the head's computed `fill` equals
+  the shaft's computed `stroke` (a resolved `rgb`, not the board's amber). Guards the
+  bug where a shared `<marker>` could not inherit the per-arrow colour and painted
+  every head amber — a browser-only rendering fault native tests could not see.
 - **Solve, step, and rate.** The app serves one combined pool picked at random near
   the user's rating, so the test overrides `Math.random` to a fixed seed and clears
   the stored rating — pinning *exactly* which puzzle appears. This is run on two

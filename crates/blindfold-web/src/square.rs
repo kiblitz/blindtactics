@@ -98,6 +98,37 @@ pub fn fan(from: (f64, f64), to: (f64, f64), offset: f64) -> ((f64, f64), (f64, 
     (shift(from), shift(to))
 }
 
+/// The three corners of an arrowhead triangle: its tip, then the two base corners.
+///
+/// `base` is where the shaft ends and `toward` a point in the direction the head
+/// points (the shaft's far endpoint); the head projects `length` forward from `base`
+/// to the tip and spreads `half_width` to either side of `base` at its back edge.
+/// Returns `[tip, left, right]`.
+///
+/// Here, and tested in `tests/square.rs`, for the same reason as [`fan`]: the tip is
+/// placed along the arrow's own direction and the base corners along its
+/// perpendicular, and getting either sign wrong draws a plausible-but-wrong head (a
+/// backward tip, most dangerously). Degenerates to three copies of `base` when `base
+/// == toward` (a zero-length arrow), guarded so it cannot divide by zero.
+pub fn arrowhead(
+    base: (f64, f64),
+    toward: (f64, f64),
+    length: f64,
+    half_width: f64,
+) -> [(f64, f64); 3] {
+    let (dx, dy) = (toward.0 - base.0, toward.1 - base.1);
+    let dist = dx.hypot(dy);
+    if dist == 0.0 {
+        return [base, base, base];
+    }
+    let (unit_x, unit_y) = (dx / dist, dy / dist);
+    let (perp_x, perp_y) = (-unit_y, unit_x);
+    let tip = (base.0 + unit_x * length, base.1 + unit_y * length);
+    let left = (base.0 + perp_x * half_width, base.1 + perp_y * half_width);
+    let right = (base.0 - perp_x * half_width, base.1 - perp_y * half_width);
+    [tip, left, right]
+}
+
 /// The squares of the board in the order they must be laid out, top-left first.
 ///
 /// A rendering order, not a chess one — which is why it lives here next to

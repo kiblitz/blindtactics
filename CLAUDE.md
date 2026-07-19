@@ -141,8 +141,8 @@ blindfold-chess-trainer/
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 66 tests (+ 6 Playwright tests across two projects, run as
-  7 cases — the reveal test runs on two pinned puzzles, and a `mobile` project runs a
+- `blindfold-web` — built, 68 tests (+ 7 Playwright tests across two projects, run as
+  8 cases — the reveal test runs on two pinned puzzles, and a `mobile` project runs a
   touch spec on a phone viewport), clippy clean. Blank board,
   drag-drawn numbered arrows each in its own colour, roster panel with real piece
   artwork, a per-move promotion control, a hover highlight, a board flip and a
@@ -220,7 +220,7 @@ a thread pool, and a file writer, and nothing worth a test.
 no toolchain. Anything that can live in core, must.
 
 The web crate should contain almost no logic worth testing *in its components*. That it has
-66 tests anyway is not a contradiction: they cover `square`, `session`, `rating`, `settings`
+68 tests anyway is not a contradiction: they cover `square`, `session`, `rating`, `settings`
 and `database`, the crate's Leptos-free parts, which is exactly where its logic was pushed so
 a native test could reach it. The rule bites on `board`/`panel`/`line`/`app` — if a test wants
 to reach into one of those, the thing it wants is in the wrong module.
@@ -520,11 +520,19 @@ than a tangle of identical amber ones. The badge number is white with a dark out
 (`paint-order: stroke` in `styles.css`) so it stays legible on every hue on both themes —
 no single fill reads on all eight. The in-flight ghost arrow keeps the board's base amber.
 
-The one shared arrowhead `<marker>` paints with `fill="context-stroke"`, not a fixed fill,
-so it takes whatever colour the referencing arrow strokes with. `currentColor` would not
-work here: a marker resolves `currentColor` at its `<defs>` position, ignoring the per-arrow
-`style:color`, so every head would come out amber. `context-stroke` is the SVG feature that
-reaches the referencing element's stroke instead.
+The arrowhead is a filled `<polygon>` drawn **in the arrow's own `<g>`**, filled with
+`currentColor` from the group's per-move `color` — exactly like the number badge's
+`<circle>`. It is deliberately **not** a shared `<marker>`, and this is a bug fixed the
+hard way: a marker lives in `<defs>`, outside the arrow's element, so it cannot inherit the
+arrow's colour. **Two** marker approaches were tried and *both* painted every head the
+board's base amber in the browser — first `fill="currentColor"` (the marker re-resolves it
+at its `<defs>` position, not the arrow's) and then `fill="context-stroke"` (which is
+supposed to copy the referencing element's stroke, but with the shaft stroked via
+`currentColor` it resolved amber all the same). Native tests could not see it — the amber
+head was a real, user-reported rendering bug. Drawing the head inline sidesteps marker paint
+entirely; the head's triangle geometry is `square::arrowhead` (native-tested for the
+tip-forward direction, the same silent-geometry care `square::fan` gets), and
+`reveal.spec.js` pins the head's rendered colour equal to its shaft's.
 
 A move drawn more than once (legal, and sometimes needed for a variation) is fanned
 perpendicular off its twins by `constants::ARROW_DUP_OFFSET` per duplicate, so both stay

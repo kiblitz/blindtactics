@@ -378,6 +378,13 @@ body {
   stroke: currentColor;
 }
 
+/* The head is filled like the shaft is stroked: currentColor, resolved from the
+ * arrow group's per-move `color`. Inline in the group (not a shared <marker>) so it
+ * actually inherits that colour — see constants::ARROW_HEAD_LENGTH. */
+.arrow__head {
+  fill: currentColor;
+}
+
 .arrow--ghost {
   opacity: 0.45;
 }

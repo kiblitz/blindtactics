@@ -217,3 +217,40 @@ fn fan_leaves_a_zero_offset_or_zero_length_segment_alone() {
     assert_eq!(square::fan(from, to, 0.0), (from, to));
     assert_eq!(square::fan(from, from, 25.0), (from, from));
 }
+
+/// The arrowhead's tip goes `length` forward from the base along the arrow's own
+/// direction, and its base corners straddle the base by `half_width` on the
+/// perpendicular — the wrong sign on the first would point the head backward, the
+/// silent-geometry class this file guards.
+#[test]
+fn arrowhead_points_forward_and_spreads_at_the_base() {
+    // Base at (100, 100) pointing straight right: tip advances in +x, base corners
+    // straddle in ±y.
+    let [tip, left, right] = square::arrowhead((100.0, 100.0), (200.0, 100.0), 30.0, 10.0);
+    assert_eq!(
+        tip,
+        (130.0, 100.0),
+        "tip is `length` forward toward the target"
+    );
+    assert_eq!(
+        left,
+        (100.0, 110.0),
+        "one base corner is `half_width` off the base"
+    );
+    assert_eq!(
+        right,
+        (100.0, 90.0),
+        "the other is `half_width` off the far side"
+    );
+}
+
+/// A zero-length arrow (`base == toward`) collapses to the base rather than dividing
+/// by a zero magnitude — the same guard `fan` has.
+#[test]
+fn arrowhead_is_degenerate_for_a_zero_length_arrow() {
+    let base = (5.0, 7.0);
+    assert_eq!(
+        square::arrowhead(base, base, 30.0, 10.0),
+        [base, base, base]
+    );
+}

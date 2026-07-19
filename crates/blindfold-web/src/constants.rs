@@ -34,56 +34,30 @@ pub const ARROW_WIDTH: u32 = 9;
 pub const ARROW_BADGE_RADIUS: u32 = 16;
 
 /// How far short of the target square's centre the arrow's *shaft* stops, in
-/// viewBox units. The head is then drawn forward from there (see
-/// [`ARROW_HEAD_ANCHOR_X`]), its tip landing a little short of the centre.
+/// viewBox units. The head is then drawn forward from there, its tip landing a
+/// little short of the centre.
 ///
 /// Two jobs at once. It keeps the tip off the square's centre so two arrows
-/// meeting on one square do not overlap into a blob, and — since the shaft now
-/// ends at the head's wide base — it is also what leaves room for the whole head.
-/// Big enough to clear the head (`ANCHOR_X` at the base means the head projects its
-/// full length forward) with a little gap beyond the tip.
+/// meeting on one square do not overlap into a blob, and — since the shaft ends at
+/// the head's wide base — it is also what leaves room for the whole head. Tuned
+/// against [`ARROW_HEAD_LENGTH`]: the shaft stops `INSET` short and the head then
+/// projects `LENGTH` of that gap back forward, so `INSET - LENGTH` of clear space is
+/// left beyond the tip. The two live together because splitting them is how they drift.
 pub const ARROW_HEAD_INSET: f64 = 42.0;
 
-/// The arrowhead marker's `id`, and the `url(#...)` that references it.
+/// The arrowhead triangle, in viewBox units: how far it projects forward from the
+/// shaft's (inset) end to its tip, and its half-width at the back edge.
 ///
-/// Two literals that must match or every arrow loses its head, so they are one
-/// literal instead.
-pub const ARROW_HEAD_ID: &str = "arrowhead";
-
-/// Side of the arrowhead marker's own viewBox.
-///
-/// The head is a `<marker>`, so it has a coordinate system of its own rather than
-/// the board's — which is why it is not in [`SQUARE_SIDE`] units. It lives here
-/// beside [`ARROW_HEAD_INSET`] because the two were tuned against each other: the
-/// inset is how far the shaft stops short to make room for exactly this head, and
-/// splitting them across two files is how they drift.
-pub const ARROW_HEAD_VIEWBOX: u32 = 10;
-
-/// Inset of the arrowhead triangle from its viewBox edge, in marker units.
-///
-/// The head's tip is at `ARROW_HEAD_VIEWBOX - ARROW_HEAD_MARGIN` and its back edge
-/// spans `ARROW_HEAD_MARGIN..=ARROW_HEAD_VIEWBOX - ARROW_HEAD_MARGIN`, so the shape
-/// never touches the viewBox edge. `board.rs` builds the `<path>` from these
-/// rather than spelling the coordinates, so retuning the viewBox moves the whole
-/// triangle with it instead of leaving a stray literal behind.
-pub const ARROW_HEAD_MARGIN: u32 = 1;
-
-/// Where the line's endpoint is pinned along the head (`refX`/`refY`).
-///
-/// `refY` is the midline, so the head is centred on the shaft. `refX` is `0` — the
-/// head's *base* — so the shaft ends where the triangle is at its widest and the
-/// whole head projects forward from there. That is the fix for the stray "stub":
-/// with the anchor near the tip (it was `7`), the shaft ended under the *narrow*
-/// end of the head, and the stroke's cap poked out either side of it. Ending at the
-/// base tucks the cap under the widest part, where nothing shows. Tuned against
-/// [`ARROW_HEAD_INSET`], which pulls the shaft back to leave room for exactly this
-/// head; the two live together because splitting them is how they drift.
-pub const ARROW_HEAD_ANCHOR_X: u32 = 0;
-pub const ARROW_HEAD_ANCHOR_Y: u32 = 5;
-
-/// The head's size as a multiple of [`ARROW_WIDTH`] — `marker*` units scale with
-/// the stroke.
-pub const ARROW_HEAD_SCALE: u32 = 4;
+/// The head is a plain filled `<polygon>` drawn in the arrow's own `<g>` and filled
+/// like the shaft — *not* a shared `<marker>`. A marker lives in `<defs>`, outside
+/// the arrow's element, so it cannot inherit the arrow's per-move colour: both
+/// `currentColor` (which the marker re-resolves in its own context) and
+/// `context-stroke` were tried, and both painted every head the board's base amber
+/// in the browser. Drawing the head inline sidesteps marker paint entirely — the
+/// same reason the number badge is an inline `<circle>`. Tuned against
+/// [`ARROW_HEAD_INSET`], which reserves the shaft space.
+pub const ARROW_HEAD_LENGTH: f64 = 32.0;
+pub const ARROW_HEAD_HALF_WIDTH: f64 = 14.0;
 
 /// Distinct colours for the numbered arrows, cycled by the move's position in the
 /// line so each arrow reads as its own colour rather than every one sharing the
