@@ -518,18 +518,31 @@ display: flex; flex-direction: column` with `html, body { overflow: hidden }`, t
 masthead and the footer are `display: none` (they are the vertical room the board needs),
 and the one column is ordered roster → board → line via `order`:
 
-- The roster (`flex: 0 1 auto; max-height: 32%; overflow-y: auto`) sits at the top —
+- The roster (`flex: 0 1 auto; max-height: 30%; overflow-y: auto`) sits at the top —
   always on screen without a `position: sticky` pin now that the page itself cannot scroll —
-  compacted (title hidden, each side's pieces wrap into a row).
+  and is compacted hard, because every row it saves is board: the title is hidden and each
+  side's `side__name` label runs *inline* as a lead-in to its wrapping piece row (not on its
+  own line), so a side is one wrapping row rather than a label line plus an entry column.
 - The board region (`flex: 1 1 auto; min-height: 0`) takes the slack. The board is wrapped
   in a `.board-frame` that is `display: contents` on desktop (a passthrough) and on mobile a
   `container-type: size` grid cell; the board is then sized `width/height: 100cqmin`, i.e.
   the smaller of the frame's width and height, so it stays square and **shrinks to fit a
   short screen instead of forcing a scroll**. `container-type: size` means the frame ignores
   the board for its own sizing, so the flex slack (not the board) drives the frame.
-- The line (`flex: 0 1 auto; max-height: 40%`) sits below; inside it the drawn-line list /
-  move list is the only scroll region (`overflow-y: auto`), so Submit and the reveal stepper
-  stay pinned on screen while a long list scrolls under them.
+- The line (`flex: 0 0 auto; max-height: 45%`) sits below, sized to its content. During
+  editing the panel title **and the drawn-arrow list are `display: none`** — the arrows are
+  already numbered on the board, so the list is pure redundancy costing ~100px of board — 
+  leaving just a one-row control bar (Submit / Undo / Clear / Give up) and the verdict. The
+  post-reveal move list (`.movelist`) is kept and is the only scroll region, so the stepper
+  and Next stay on screen while a long line scrolls under them.
+
+**Why the compaction, not just the shell.** The board can never exceed the phone's width, so
+on a tall phone it is already full-width; the small-board complaint is a *short* phone, where
+the board goes height-bound. Measured: at a 667px viewport the first shell gave a 219px board
+(roster 147 + line 157 ate the rest); dropping the drawn-line list and inlining the roster
+labels cut those to 97 and 92 and grew the board to **335px** — near full width — with the
+page still not scrolling. So the levers that matter are vertical: hide anything redundant, and
+measure the board at a *short* viewport, not a tall one.
 
 `.layout__panels` is `display: contents` so its two regions (`.layout__roster`,
 `.layout__line`) become flex siblings of `.layout__board` that `order` can place — which is
