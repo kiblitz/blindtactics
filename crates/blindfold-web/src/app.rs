@@ -247,8 +247,14 @@ pub fn App() -> impl IntoView {
                         // and line rebuild fresh when a new one is served.
                         puzzle.track();
                         let r = Signal::derive(move || roster::of(&position.get()));
+                        // Wrapped so each is an independent layout region: on a phone
+                        // the roster is hoisted above the board and pinned there (see
+                        // `.layout__roster` in styles.css), the line stays below.
                         view! {
-                            <panel::Roster roster=r />
+                            <div class="layout__roster">
+                                <panel::Roster roster=r />
+                            </div>
+                            <div class="layout__line">
                             <line::Line
                                 drawn=drawn
                                 solver=solver.get()
@@ -267,6 +273,7 @@ pub fn App() -> impl IntoView {
                                 on_step_forward=Callback::new(step_forward)
                                 on_step_to=Callback::new(step_to)
                             />
+                            </div>
                         }
                     }}
                 </aside>

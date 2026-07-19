@@ -153,9 +153,11 @@ blindfold-chess-trainer/
   auto-advancing animation; the board still fades in on reveal). The puzzle is never
   labelled with its mate depth; puzzles are drawn at random from a pool near the
   user's Elo, which is scored on the first submission and persisted to `localStorage`.
-  Laid out to work on a phone: the two-column layout stacks below 840px, the board
-  takes touch input (pointer events + `touch-action: none`), and controls grow to a
-  ~44px tap target on a coarse pointer.
+  Laid out to work on a phone: below 840px the two-column layout collapses to one
+  column ordered roster → board → line, with the roster pinned to the top so the piece
+  locations stay on screen while drawing (see "Mobile" below); the board takes touch
+  input (pointer events + `touch-action: none`), and controls grow to a ~44px tap
+  target on a coarse pointer.
   Builds to a wasm bundle with `trunk build --release` (the database is ~46 KiB of that).
   **KiB, and stated as such deliberately**: an earlier draft said "687 KB" from a
   byte count read as decimal while `database.rs` said "46 KB" from the same count
@@ -346,8 +348,8 @@ and that the POV persists across a reload while the flip does not (see "Which wa
 faces" below); a fifth that giving up reveals the solution as a scored loss and the SAN
 move list navigates by both click and arrow key (see "The analysis move list" above); and
 a sixth — in a separate `mobile` Playwright *project* on a phone viewport,
-`e2e/mobile.spec.js` — that a **touch** drag draws an arrow and the layout stacks (see
-"Mobile" above). Shared e2e utilities (`collectErrors`, the board/drag constants) live in
+`e2e/mobile.spec.js` — that a **touch** drag draws an arrow and the roster pins above the
+board (see "Mobile" above). Shared e2e utilities (`collectErrors`, the board/drag constants) live in
 `e2e/helpers.js` so the two specs cannot drift on what a page error or a drag budget is.
 
 **Two e2e traps this cost real time on, both about the *harness*, not the app.** First,
@@ -504,13 +506,29 @@ itself for its highlight.
 The app works on a phone by construction, and this is now *checked* rather than
 asserted. The board takes **pointer events** (which fire for touch) with
 `touch-action: none` (or the browser pans the page instead of delivering the drag), the
-two-column layout **stacks below 840px**, and interactive controls grow to a ~44px tap
-target under `@media (pointer: coarse)`. A second Playwright project, `mobile`, runs
-`e2e/mobile.spec.js` on a 412×915 phone viewport with touch enabled: it asserts the
-layout stacks, `touch-action` is `none`, the board fits above the fold, and a
-**touch-type pointer drag** (dispatched as `pointerType: "touch"`, the input a finger
-produces) draws an arrow. The reveal/step wiring is orientation- and size-independent,
-so it is not re-proved there — only the phone-specific concerns are.
+two-column layout **collapses to one column below 840px**, and interactive controls grow
+to a ~44px tap target under `@media (pointer: coarse)`.
+
+**The single-column order is roster → board → line, and the roster pins to the top.** A
+blindfold solver has to read the piece locations *while* drawing, so a naive stack (board,
+then panels below it) forced a scroll up to the roster and back down to the board for every
+move — the exact complaint this fixes. The `.layout__panels` wrapper becomes `display:
+contents` at that width so its two regions (`.layout__roster`, `.layout__line`) drop into
+the `.layout` grid as siblings of `.layout__board`; `order: 1/2/3` then places roster above
+the board and line below it. The roster is `position: sticky; top: 0`, height-capped at
+`40vh` with its own scroll, and compacted (title hidden, each side's pieces wrap into a row)
+so it stays a thin strip over a full-size board. This is why the roster and line are each
+wrapped in their own `<div>` in `app.rs` — the wrappers are passthrough on desktop (plain
+children of the flex column) and become the independently-ordered grid regions on mobile.
+
+A second Playwright project, `mobile`, runs `e2e/mobile.spec.js` on a 412×915 phone
+viewport with touch enabled: it asserts the roster sits **above** the board and the line
+**below** it, that the roster **stays pinned** near the top when the board is scrolled up
+(read via `getBoundingClientRect`, so the scroll is reflected — a `boundingBox()` the
+sticky check can't rely on), that the board fits fully below the pinned roster within the
+viewport, and that a **touch-type pointer drag** (dispatched as `pointerType: "touch"`, the
+input a finger produces) draws an arrow. The reveal/step wiring is orientation- and
+size-independent, so it is not re-proved there — only the phone-specific concerns are.
 
 ### Arrows are coloured per move, and duplicates fan apart
 

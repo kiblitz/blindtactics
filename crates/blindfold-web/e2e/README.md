@@ -60,10 +60,12 @@ and `mobile.spec.js` on a phone viewport with touch. `reveal.spec.js` holds six 
   and the **arrow keys** step the reveal (left to the empty start, right re-lights the
   first move) — all reactive concerns a native test cannot see.
 
-`mobile.spec.js` (the `mobile` project) asserts the phone-specific behaviour: the
-two-column layout **stacks** (panels below the board), `touch-action` is `none`, the
-whole board fits above the fold, and a **touch-type pointer drag** draws an arrow. The
-reveal/step wiring is size-independent and not re-proved there.
+`mobile.spec.js` (the `mobile` project) asserts the phone-specific behaviour: at a phone
+width the roster is **hoisted above the board and pins to the top** (so the piece
+locations stay on screen while drawing) with the line below it, the roster **stays
+pinned** when the board is scrolled up, `touch-action` is `none`, the board sits fully
+below the pinned roster within the viewport, and a **touch-type pointer drag** draws an
+arrow. The reveal/step wiring is size-independent and not re-proved there.
 
 The solutions come from all four committed `database/mate_in_*.jsonl` files, read
 off disk, so the test cannot drift from what the app was built with. Shared helpers

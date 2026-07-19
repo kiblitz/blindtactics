@@ -30,31 +30,37 @@ async function touchDrag(page, from, to) {
   await page.dispatchEvent(".board", "pointerup", init(to.x, to.y, 0));
 }
 
-test("on a touch phone the layout stacks and a touch drag draws an arrow", async ({ page }) => {
+// Viewport-relative geometry (getBoundingClientRect), so a scroll is reflected —
+// which `boundingBox()` alone does not make unambiguous, and the sticky-pin check
+// turns on exactly that.
+const topOf = (page, sel) =>
+  page.locator(sel).evaluate((el) => el.getBoundingClientRect().top);
+const rectOf = (page, sel) =>
+  page.locator(sel).evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  });
+
+test("on a touch phone the roster pins above the board and a touch drag draws an arrow", async ({
+  page,
+}) => {
   const errors = collectErrors(page);
 
   await page.goto("/");
   await expect(page.locator(".board")).toBeVisible();
 
-  const board = await page.locator(".board").boundingBox();
-  if (!board) throw new Error("the board has no box");
-
-  // The whole board is on screen, so both endpoints of a drag land on a square.
   const viewport = page.viewportSize();
   expect(viewport, "a viewport size must be configured").toBeTruthy();
-  expect(
-    board.y + board.height,
-    "the whole board must fit the viewport or drag endpoints fall off-screen"
-  ).toBeLessThanOrEqual(viewport.height);
 
-  // On a narrow screen the two-column layout collapses: the panels stack *below* the
-  // board rather than sitting beside it.
-  const panels = await page.locator(".layout__panels").boundingBox();
-  if (!panels) throw new Error("the panels have no box");
-  expect(
-    panels.y,
-    "the roster and line panels stack below the board on a phone"
-  ).toBeGreaterThanOrEqual(board.y + board.height - 1);
+  // On a phone the roster is hoisted *above* the board (so piece locations can be
+  // read while drawing) and the line sits below it — the reorder the layout does at
+  // this width.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const boardTop0 = await topOf(page, ".board");
+  expect(await topOf(page, ".layout__roster"), "roster is above the board").toBeLessThan(boardTop0);
+  expect(await topOf(page, ".layout__line"), "the line is below the board").toBeGreaterThan(
+    boardTop0
+  );
 
   // `touch-action: none` is set on the board — without it the browser pans the page
   // instead of delivering the drag to the app.
@@ -63,9 +69,29 @@ test("on a touch phone the layout stacks and a touch drag draws an arrow", async
     .evaluate((el) => getComputedStyle(el).touchAction);
   expect(touchAction).toBe("none");
 
-  // A touch drag between two squares draws an arrow — the core interaction on a
-  // phone. A vertical drag in the middle of the board is two distinct squares
-  // whatever puzzle is on screen, so no puzzle needs pinning.
+  // Scroll until the roster pins to the top; the board then sits right below it, fully
+  // visible — the intended reading position, and the pin is a browser/layout concern a
+  // native test cannot see. (Scrolling by the roster's own top pins it with the board
+  // just beneath, rather than over-scrolling the board up under the pinned roster.)
+  const rosterTop0 = await topOf(page, ".layout__roster");
+  await page.evaluate((y) => window.scrollTo(0, y + 4), rosterTop0);
+  const rosterPinned = await topOf(page, ".layout__roster");
+  expect(rosterPinned, "the roster stays pinned near the top when scrolled").toBeGreaterThanOrEqual(
+    -1
+  );
+  expect(rosterPinned, "and does not scroll away").toBeLessThan(viewport.height * 0.5);
+
+  // The board is fully on screen below the pinned roster, so both endpoints of a drag
+  // land on a square.
+  const board = await rectOf(page, ".board");
+  expect(
+    board.y + board.height,
+    "the board sits fully below the pinned roster, within the viewport"
+  ).toBeLessThanOrEqual(viewport.height + 1);
+
+  // A touch drag between two squares draws an arrow — the core interaction on a phone.
+  // A vertical drag in the middle of the board is two distinct squares whatever puzzle
+  // is on screen, so no puzzle needs pinning.
   const cellW = board.width / BOARD_SIDE;
   const cellH = board.height / BOARD_SIDE;
   const fileX = board.x + 4.5 * cellW;
