@@ -536,13 +536,22 @@ and the one column is ordered roster → board → line via `order`:
   post-reveal move list (`.movelist`) is kept and is the only scroll region, so the stepper
   and Next stay on screen while a long line scrolls under them.
 
+The board's **view controls (flip, settings) live in the header row** (`.topbar`), not in
+a bar above the board. `.topbar` is a flex row holding `RatingBar` (`flex: 1`, so it fills
+and pushes the controls right) and `BoardBar`; on both desktop and mobile it reads `Rating
+1200 … 400 puzzles ⇅ ⚙`. This exists for the phone: a separate control bar above the board
+was another ~40px row the board wanted. Desktop simply shares the consolidation — the board
+gets a cleaner top edge. `BoardBar` is therefore rendered as a sibling of `RatingBar` in
+`app.rs`, out of `.layout__board`.
+
 **Why the compaction, not just the shell.** The board can never exceed the phone's width, so
 on a tall phone it is already full-width; the small-board complaint is a *short* phone, where
-the board goes height-bound. Measured: at a 667px viewport the first shell gave a 219px board
-(roster 147 + line 157 ate the rest); dropping the drawn-line list and inlining the roster
-labels cut those to 97 and 92 and grew the board to **335px** — near full width — with the
-page still not scrolling. So the levers that matter are vertical: hide anything redundant, and
-measure the board at a *short* viewport, not a tall one.
+the board goes height-bound. Measured at a 667px viewport, growing the board in steps: the
+first shell gave **219px** (roster 147 + line 157 ate the rest); dropping the drawn-line list
+and inlining the roster labels cut those to 97 and 92 → **335px**; moving the view controls
+into the header row reclaimed the board-bar's row → **384px**, near full width — the page
+still not scrolling at any step. So the levers that matter are vertical: hide or consolidate
+anything redundant, and measure the board at a *short* viewport, not a tall one.
 
 `.layout__panels` is `display: contents` so its two regions (`.layout__roster`,
 `.layout__line`) become flex siblings of `.layout__board` that `order` can place — which is

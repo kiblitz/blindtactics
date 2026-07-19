@@ -204,20 +204,26 @@ pub fn App() -> impl IntoView {
                 </p>
             </header>
 
-            <RatingBar
-                rating=elo
-                delta=elo_delta
-                total=Signal::derive(move || session.with(session::Session::total))
-            />
+            // One header row: the rating and pool size on the left, the board's view
+            // controls (flip, settings) on the right — the toolbar for everything that
+            // is not the board itself. Putting the view controls here rather than in a
+            // bar above the board frees that whole row for the board on a phone.
+            <div class="topbar">
+                <RatingBar
+                    rating=elo
+                    delta=elo_delta
+                    total=Signal::derive(move || session.with(session::Session::total))
+                />
+                <BoardBar
+                    pov=pov
+                    flipped=flipped
+                    on_flip=Callback::new(flip)
+                    on_choose_pov=Callback::new(choose_pov)
+                />
+            </div>
 
             <div class="layout">
                 <div class="layout__board">
-                    <BoardBar
-                        pov=pov
-                        flipped=flipped
-                        on_flip=Callback::new(flip)
-                        on_choose_pov=Callback::new(choose_pov)
-                    />
                     // A frame around the board so it can be a size container on a
                     // phone: the board then fills the smaller of the frame's width and
                     // height, shrinking to fit the space the fixed-height mobile shell
@@ -359,9 +365,12 @@ fn Facts(session: RwSignal<session::Session>) -> impl IntoView {
 
 /// The board's view controls: flip, and the settings menu.
 ///
-/// Both change *how* the board is drawn, not what the puzzle is, so they sit
-/// together above it. The flip is a transient per-puzzle toggle (its `pressed` state
-/// tracks the attempt); the settings menu holds the persisted point of view.
+/// Both change *how* the board is drawn, not what the puzzle is, so they sit in the
+/// header row (`.topbar`) with the rating — the toolbar for everything that is not the
+/// board — rather than in a bar above the board, which on a phone is a row of height
+/// the board would rather have. The flip is a transient per-puzzle toggle (its
+/// `pressed` state tracks the attempt); the settings menu holds the persisted point of
+/// view.
 #[component]
 fn BoardBar(
     #[prop(into)] pov: Signal<settings::Pov>,

@@ -174,16 +174,27 @@ body {
   color: var(--chalk-dim);
 }
 
-/* ---- status bar -------------------------------------------------------- */
+/* ---- header row (status + view controls) ------------------------------- */
+
+/* One row across the top: the rating/pool on the left, the board's view controls on
+ * the right. The divider under the whole row lives here, not on `.statusbar`, so it
+ * spans both. */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--line);
+}
 
 .statusbar {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 1rem;
-  margin-bottom: 1.5rem;
-  padding-bottom: 0.8rem;
-  border-bottom: 1px solid var(--line);
+  /* Fills the header row so the view controls are pushed to its right end. */
+  flex: 1;
 }
 
 .elo {
@@ -272,9 +283,9 @@ body {
     display: none;
   }
 
-  .statusbar {
+  .topbar {
     margin: 0;
-    padding-bottom: 0.5rem;
+    padding-bottom: 0.4rem;
   }
 
   /* The layout fills the space under the rating bar and stacks in one column: the
@@ -957,11 +968,11 @@ body {
 
 /* ---- board bar (view controls) ---------------------------------------- */
 
+/* Flip and settings, sitting in the header row (`.topbar`) beside the rating. */
 .boardbar {
   display: flex;
-  justify-content: flex-end;
   gap: 0.4rem;
-  margin-bottom: 0.6rem;
+  flex: 0 0 auto;
 }
 
 /* The settings gear anchors its dropdown to itself, which then floats over the
