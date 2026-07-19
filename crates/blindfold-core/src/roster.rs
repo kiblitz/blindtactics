@@ -3,8 +3,9 @@
 //! Modelled as structured data rather than a display string, deliberately. The
 //! same roster has to render three ways: as SVG piece icons beside coordinates, as
 //! plain text ([`Roster::text`], "white to play. white: king d5…"), and as speech
-//! ([`Roster::speech`], the same but with squares spelled for a voice — "king dee
-//! five"). Building a string here would force the other renderings to parse it apart.
+//! ([`Roster::speech`], the same but with squares upper-cased for a voice — "king D5",
+//! read "king dee five"). Building a string here would force the other renderings to
+//! parse it apart.
 //!
 //! Text and speech rendering live here rather than in the UI crate because they are
 //! shared (plain text feeds display and screen readers; speech feeds the read-aloud
@@ -149,15 +150,14 @@ impl Roster {
         self.render(square_plain)
     }
 
-    /// The same announcement rendered for text-to-speech: each square spelled so a
+    /// The same announcement rendered for text-to-speech: each square upper-cased so a
     /// speech engine reads the file as its letter *name*, not as a word.
     ///
     /// Separate from [`text`](Roster::text) deliberately. Handing "a2" to the
     /// browser's `speechSynthesis` gets the lone file letter read as the article "a" —
-    /// "ah two" rather than "ay two". This spells it out so the file is spoken as a
-    /// letter. It is *not* right for a screen reader, which spells coordinates correctly
-    /// on its own and would read the spelled-out form as gibberish, which is why the two
-    /// renderings stay distinct. See [`square_spoken`].
+    /// "ah two" rather than "ay two"; the upper-cased "A2" is the cell reference "ay
+    /// two". It is *not* right for a screen reader, which spells coordinates correctly on
+    /// its own, which is why the two renderings stay distinct. See [`square_spoken`].
     pub fn speech(&self) -> String {
         self.render(square_spoken)
     }
@@ -243,50 +243,30 @@ fn square_plain(square: shakmaty::Square) -> String {
     square.to_string()
 }
 
-/// A square spelled for text-to-speech: the file as its spoken letter *name*, the
-/// rank as its digit — `b7` → `"B. 7"`, `a2` → `"A. 2"` (the initials that read "bee",
-/// "ay").
+/// A square spelled for text-to-speech: the coordinate uppercased — `b7` → `"B7"`,
+/// `a2` → `"A2"`, `e3` → `"E3"`. The spreadsheet-cell form, which a speech engine reads
+/// as a tight "letter name + number" ("bee seven", "ay two", "ee three").
 ///
-/// Why not just "a2": a speech engine reads the lone file letter as a *word*, so "a2"
-/// comes out "ah two" (the article "a"), and other files fare no better. Spelling the
-/// file as its initial forces letter-name reading — see [`file_spoken`]. The rank digit
-/// is left as a digit — "7" is read "seven" reliably, unlike the file letters. Read off
-/// the square's own `Display` (`"a1"`), so the file/rank split cannot disagree with how a
-/// square prints.
+/// Two things it must get right, and one empirical reversal behind them:
+///
+/// - **Letter name, not the article.** A lone lower-case `a` is read as the word "a"
+///   ("ah"), so `"a2"` comes out "ah two". Upper-casing drops the engine into
+///   letter-name reading — `"A2"` is the cell reference "ay two". The rank digit reads
+///   correctly on its own either way.
+/// - **No separation.** The file and rank stay glued into one token so they are spoken
+///   as a unit. This is the fix for a real complaint: an earlier form spelled each file
+///   as an *initial with a full stop* (`"A. 2"`) to force letter-name reading, but the
+///   full stop is a sentence break — it split "a2" into "ay … two" with a long pause
+///   between, and on the neural TTS→STT loop the `a`-file's period form was mis-voiced
+///   badly enough to be heard as "eight three" rather than "A three". The glued
+///   upper-case coordinate reads cleanly on that loop across voices, with no gap, and
+///   the pause is gone.
+///
+/// Still *not* right for a screen reader, which spells coordinates correctly on its own
+/// and wants the plain [`text`](Roster::text); the two renderings stay distinct. Read
+/// off the square's own `Display` (`"a1"`), so it cannot disagree with how a square prints.
 pub fn square_spoken(square: shakmaty::Square) -> String {
-    let coordinates = square.to_string();
-    let mut chars = coordinates.chars();
-    let file = chars
-        .next()
-        .expect("a square's coordinates lead with a file letter");
-    let rank: String = chars.collect();
-    format!("{} {}", file_spoken(file), rank)
-}
-
-/// The spoken name of a file letter — written as the letter's *initial* so a speech
-/// engine reads its name.
-///
-/// Every file is spelled `"A."` … `"H."` rather than as a word, and that uniformity is
-/// deliberate, arrived at empirically (a text-to-speech → speech-recognition loop over
-/// three neural voices). Word spellings misfire two ways: a bare vowel letter is read as
-/// a *word* — "a2" → "ah two" (the article), "ay" → `/aɪ/` "eye" — and a held-vowel
-/// spelling like `"ee"` is stretched or doubled on some voices ("ee 3" → "e-e three").
-/// The initial form drops the engine into letter-name (initials) reading — `"A."` →
-/// "ay", `"E."` → "ee" — crisply and consistently, with only the light pause an initial
-/// carries. `b`–`h` sound the same as their old word spellings; `a` and `e` are the ones
-/// this rescues.
-fn file_spoken(file: char) -> &'static str {
-    match file {
-        'a' => "A.",
-        'b' => "B.",
-        'c' => "C.",
-        'd' => "D.",
-        'e' => "E.",
-        'f' => "F.",
-        'g' => "G.",
-        'h' => "H.",
-        _ => unreachable!("a board file is one of a-h"),
-    }
+    square.to_string().to_ascii_uppercase()
 }
 
 /// What a role is called when it is announced.

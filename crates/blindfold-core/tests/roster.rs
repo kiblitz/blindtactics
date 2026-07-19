@@ -82,46 +82,48 @@ fn reads_a_position() {
 
 // --- speech (the text-to-speech rendering) -----------------------------------
 
-/// The read-aloud rendering spells each file as its letter *name* (as an initial), so a
-/// speech engine says "gee one", not the "ah two" a bare "a2" produces — the whole reason
-/// `speech` is separate from `text`. Same wording and order; only the squares change.
+/// The read-aloud rendering upper-cases each square, so a speech engine reads the file
+/// as its letter *name* ("gee one"), not the "ah two" a bare lower-case "a2" produces —
+/// the whole reason `speech` is separate from `text`. Same wording and order; only the
+/// squares change.
 #[test]
 fn speech_spells_files_as_letter_names() {
     let r = roster::of(&common::pos(common::BACK_RANK));
     assert_eq!(
         r.speech(),
-        "white to play. white: king G. 1. rook A. 1. \
-         black: king G. 8. pawns F. 7, G. 7, H. 7."
+        "white to play. white: king G1. rook A1. \
+         black: king G8. pawns F7, G7, H7."
     );
 }
 
-/// Every file is spelled as its initial, never as a bare letter — the failures that fixes
-/// are "a2" → "ah two" (the article) and a held "ee" stretched on some voices. The rank
-/// stays a digit, which a speech engine reads correctly on its own.
+/// Every square is upper-cased and kept glued — the file is the letter name, not the
+/// article "a", and the rank stays fused to it so there is no pause between them (the
+/// separation an earlier full-stop form introduced). The rank digit reads correctly on
+/// its own.
 #[test]
 fn every_file_is_spelled_out() {
     for (square, spoken) in [
-        (shakmaty::Square::A1, "A. 1"),
-        (shakmaty::Square::B2, "B. 2"),
-        (shakmaty::Square::C3, "C. 3"),
-        (shakmaty::Square::D4, "D. 4"),
-        (shakmaty::Square::E5, "E. 5"),
-        (shakmaty::Square::F6, "F. 6"),
-        (shakmaty::Square::G7, "G. 7"),
-        (shakmaty::Square::H8, "H. 8"),
+        (shakmaty::Square::A1, "A1"),
+        (shakmaty::Square::B2, "B2"),
+        (shakmaty::Square::C3, "C3"),
+        (shakmaty::Square::D4, "D4"),
+        (shakmaty::Square::E5, "E5"),
+        (shakmaty::Square::F6, "F6"),
+        (shakmaty::Square::G7, "G7"),
+        (shakmaty::Square::H8, "H8"),
     ] {
         assert_eq!(roster::square_spoken(square), spoken);
     }
 }
 
 /// `speech` and `text` are the same announcement: they differ only in how a square is
-/// spelled, never in the words around it.
+/// spelled (upper-cased vs. bare), never in the words around it.
 #[test]
 fn speech_differs_from_text_only_in_the_squares() {
     let r = roster::of(&common::pos(common::BACK_RANK));
     assert!(r.text().contains("g1"), "plain text keeps bare coordinates");
-    assert!(!r.speech().contains("g1"), "speech spells them out");
-    assert!(r.speech().contains("G. 1"));
+    assert!(!r.speech().contains("g1"), "speech upper-cases them");
+    assert!(r.speech().contains("G1"));
     assert!(r.text().starts_with("white to play."));
     assert!(r.speech().starts_with("white to play."));
 }

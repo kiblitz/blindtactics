@@ -793,7 +793,7 @@ fn a_spoken_move_resolves_to_an_arrow_and_is_read_back() {
         session::interpret("rook a8", &puzzle, &[]),
         session::Heard::Draw {
             arrow: "a1a8".parse().unwrap(),
-            say: "rook to A. 8.".to_owned(),
+            say: "rook to A8.".to_owned(),
         }
     );
 }
@@ -831,14 +831,14 @@ fn a_later_move_resolves_against_the_line_played_forward() {
         session::interpret("king g6", &puzzle, &[]),
         session::Heard::Draw {
             arrow: first,
-            say: "king to G. 6.".to_owned(),
+            say: "king to G6.".to_owned(),
         }
     );
     assert_eq!(
         session::interpret("rook b8", &puzzle, &[first]),
         session::Heard::Draw {
             arrow: "b1b8".parse().unwrap(),
-            say: "rook to B. 8.".to_owned(),
+            say: "rook to B8.".to_owned(),
         }
     );
 }
@@ -861,7 +861,7 @@ fn an_ambiguous_move_is_read_back_as_a_question_not_guessed() {
     let puzzle = voice_puzzle(TWO_KNIGHTS, "d2e4");
     assert_eq!(
         session::interpret("knight e4", &puzzle, &[]),
-        session::Heard::Say("Which one? D. 2 or F. 2.".to_owned())
+        session::Heard::Say("Which one? D2 or F2.".to_owned())
     );
 }
 
