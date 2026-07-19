@@ -5,6 +5,7 @@
 //! and this is where it is pinned — the sign of the flip especially, the same care
 //! `square` takes with the board geometry.
 
+use blindfold_web::constants;
 use blindfold_web::settings;
 
 #[test]
@@ -59,4 +60,84 @@ fn every_pov_has_a_distinct_label() {
     assert!(settings::Pov::ALL
         .into_iter()
         .all(|p| !p.label().is_empty()));
+}
+
+// --- input / output modes ----------------------------------------------------
+
+/// The whole behavioural difference between the two input modes: `Physical` always
+/// resets the mic to off on a new puzzle; `Audio` carries the last-set state, so an
+/// armed mic re-arms itself and a disarmed one stays off.
+#[test]
+fn input_arms_the_mic_only_in_audio_mode_and_carries_the_last_state() {
+    assert!(
+        !settings::Input::Physical.arms_next(true),
+        "drawing mode resets the mic to off even after the user armed it"
+    );
+    assert!(!settings::Input::Physical.arms_next(false));
+
+    assert!(
+        settings::Input::Audio.arms_next(true),
+        "speaking mode re-arms a mic the user last left on"
+    );
+    assert!(
+        !settings::Input::Audio.arms_next(false),
+        "but a mic the user last turned off stays off"
+    );
+}
+
+/// Output's one question for the rest of the app: does it speak on its own? Only the
+/// audio mode does — the visual mode leaves speech to the manual speak button.
+#[test]
+fn only_audio_output_speaks_automatically() {
+    assert!(settings::Output::Audio.speaks());
+    assert!(!settings::Output::Visual.speaks());
+}
+
+/// Both mode menus render straight off `ALL`, so each needs a distinct, non-empty
+/// label per value — the same invariant the POV menu has.
+#[test]
+fn input_and_output_labels_are_distinct_and_present() {
+    let inputs: std::collections::HashSet<&str> = settings::Input::ALL
+        .into_iter()
+        .map(|i| i.label())
+        .collect();
+    assert_eq!(inputs.len(), settings::Input::ALL.len());
+    assert!(settings::Input::ALL
+        .into_iter()
+        .all(|i| !i.label().is_empty()));
+
+    let outputs: std::collections::HashSet<&str> = settings::Output::ALL
+        .into_iter()
+        .map(|o| o.label())
+        .collect();
+    assert_eq!(outputs.len(), settings::Output::ALL.len());
+    assert!(settings::Output::ALL
+        .into_iter()
+        .all(|o| !o.label().is_empty()));
+}
+
+// --- silence timeout ---------------------------------------------------------
+
+/// The silence timeout is clamped to `[MIN, MAX]`, so neither a stepper press nor a
+/// corrupt stored value can drive it out of the usable range. The default sits inside
+/// the range, so it survives clamping unchanged.
+#[test]
+fn silence_is_clamped_to_the_usable_range() {
+    assert_eq!(
+        settings::clamp_silence(0),
+        constants::SILENCE_MIN_SECS,
+        "below the floor clamps up"
+    );
+    assert_eq!(
+        settings::clamp_silence(9_999),
+        constants::SILENCE_MAX_SECS,
+        "above the ceiling clamps down"
+    );
+    // If the default were outside the range, clamping would change it and this would
+    // fail — so this doubles as the "default is within range" invariant.
+    assert_eq!(
+        settings::clamp_silence(constants::SILENCE_DEFAULT_SECS),
+        constants::SILENCE_DEFAULT_SECS,
+        "the default is inside the range and unchanged"
+    );
 }
