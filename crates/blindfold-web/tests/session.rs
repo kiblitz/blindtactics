@@ -754,3 +754,134 @@ fn the_movelist_opens_on_black_when_black_moves_first() {
         "the row keeps the position's own move number"
     );
 }
+
+// --- voice input (`interpret`) -----------------------------------------------
+//
+// Built from inline puzzles, not the database, because these pin the exact spoken
+// wording against known positions — the database's puzzles are picked for their
+// mates, not for legible test assertions.
+
+/// A puzzle from a FEN and a space-separated UCI solution. Depth is the solution
+/// length; the rating is irrelevant to `interpret`.
+fn voice_puzzle(fen: &str, solution: &str) -> puzzle::Puzzle {
+    let solution: Vec<arrow::Arrow> = solution
+        .split_whitespace()
+        .map(|u| u.parse().expect("test arrow parses"))
+        .collect();
+    puzzle::Puzzle {
+        id: "test".to_owned(),
+        fen: fen.to_owned(),
+        depth: solution.len(),
+        solution,
+        rating: 1500,
+    }
+}
+
+/// White Ra1, Kg1; Black Kg8, pawns f7 g7 h7. Mate in 1: Ra8#.
+const MATE_IN_1: &str = "6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1";
+/// The BRANCHING_LINEAR fixture: Kf6 Rb1 vs Kh8 a7 c7. Mate in 2: Kg6 then Rb8#.
+const MATE_IN_2: &str = "7k/p1p5/5K2/8/8/8/8/1R6 w - - 0 1";
+/// Two white knights (d2, f2) both reaching e4 — for the ambiguity path.
+const TWO_KNIGHTS: &str = "4k3/8/8/8/8/8/3N1N2/4K3 w - - 0 1";
+/// White may castle either side — for the castle paths.
+const BOTH_CASTLES: &str = "4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1";
+
+#[test]
+fn a_spoken_move_resolves_to_an_arrow_and_is_read_back() {
+    let puzzle = voice_puzzle(MATE_IN_1, "a1a8");
+    assert_eq!(
+        session::interpret("rook a8", &puzzle, &[]),
+        session::Heard::Draw {
+            arrow: "a1a8".parse().unwrap(),
+            say: "rook to A. 8.".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn a_spoken_command_is_passed_through() {
+    let puzzle = voice_puzzle(MATE_IN_1, "a1a8");
+    assert_eq!(
+        session::interpret("submit", &puzzle, &[]),
+        session::Heard::Command(blindfold_core::diction::Command::Submit)
+    );
+    assert_eq!(
+        session::interpret("next", &puzzle, &[]),
+        session::Heard::Command(blindfold_core::diction::Command::Next)
+    );
+}
+
+#[test]
+fn an_unrecognised_phrase_asks_to_repeat() {
+    let puzzle = voice_puzzle(MATE_IN_1, "a1a8");
+    assert!(matches!(
+        session::interpret("mumble mumble", &puzzle, &[]),
+        session::Heard::Say(_)
+    ));
+}
+
+#[test]
+fn a_later_move_resolves_against_the_line_played_forward() {
+    // The second move is resolved at the position after the first solver move *and*
+    // the opponent's reply — proving `interpret` plays the stored line forward rather
+    // than resolving every move against the start.
+    let puzzle = voice_puzzle(MATE_IN_2, "f6g6 b1b8");
+    let first = "f6g6".parse::<arrow::Arrow>().unwrap();
+    assert_eq!(
+        session::interpret("king g6", &puzzle, &[]),
+        session::Heard::Draw {
+            arrow: first,
+            say: "king to G. 6.".to_owned(),
+        }
+    );
+    assert_eq!(
+        session::interpret("rook b8", &puzzle, &[first]),
+        session::Heard::Draw {
+            arrow: "b1b8".parse().unwrap(),
+            say: "rook to B. 8.".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn a_move_past_the_end_of_the_line_says_so() {
+    // The whole mate-in-1 line is already entered, so there is no next move to make.
+    let puzzle = voice_puzzle(MATE_IN_1, "a1a8");
+    let entered = ["a1a8".parse::<arrow::Arrow>().unwrap()];
+    assert!(matches!(
+        session::interpret("rook a7", &puzzle, &entered),
+        session::Heard::Say(_)
+    ));
+}
+
+#[test]
+fn an_ambiguous_move_is_read_back_as_a_question_not_guessed() {
+    // Two knights reach e4; `interpret` must ask which by from-square, spelled aloud,
+    // never silently pick one.
+    let puzzle = voice_puzzle(TWO_KNIGHTS, "d2e4");
+    assert_eq!(
+        session::interpret("knight e4", &puzzle, &[]),
+        session::Heard::Say("Which one? D. 2 or F. 2.".to_owned())
+    );
+}
+
+#[test]
+fn a_named_castle_resolves_and_is_read_back_as_a_castle() {
+    let puzzle = voice_puzzle(BOTH_CASTLES, "e1g1");
+    assert_eq!(
+        session::interpret("castle kingside", &puzzle, &[]),
+        session::Heard::Draw {
+            arrow: "e1g1".parse().unwrap(),
+            say: "Castle kingside.".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn a_bare_castle_with_two_options_asks_which_side() {
+    let puzzle = voice_puzzle(BOTH_CASTLES, "e1g1");
+    assert!(matches!(
+        session::interpret("castle", &puzzle, &[]),
+        session::Heard::Say(_)
+    ));
+}

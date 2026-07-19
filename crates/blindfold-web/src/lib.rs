@@ -20,6 +20,7 @@ pub mod line;
 pub mod panel;
 pub mod pieces;
 pub mod rating;
+pub mod recognition;
 pub mod session;
 pub mod settings;
 pub mod speech;

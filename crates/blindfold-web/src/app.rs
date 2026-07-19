@@ -5,11 +5,13 @@ use crate::database;
 use crate::line;
 use crate::panel;
 use crate::rating;
+use crate::recognition;
 use crate::session;
 use crate::settings;
 use crate::speech;
 use crate::square;
 use blindfold_core::arrow;
+use blindfold_core::diction;
 use blindfold_core::roster;
 use leptos::prelude::*;
 
@@ -166,6 +168,49 @@ pub fn App() -> impl IntoView {
     let step_forward = move |()| attempt.update(session::Attempt::step_forward);
     let step_to = move |ply: usize| attempt.update(|a| a.step_to(ply));
 
+    // Voice input. A heard transcript becomes a drawn arrow, an app command, or a
+    // spoken reply — all decided by `session::interpret` (native-tested), against the
+    // line played forward through the stored defenses. Here we only carry the verdict
+    // out, reusing the very same action closures the buttons use so the two paths
+    // cannot diverge. Confirmations and questions are spoken through `speech` directly,
+    // *not* gated on the read-aloud `sound` toggle: voice mode needs its own feedback,
+    // and the mic-enabling tap is the gesture browsers require before any speech.
+    let mic_supported = recognition::is_supported();
+    let listening = RwSignal::new(false);
+    let handle_voice = move |transcript: String| {
+        let heard = puzzle.with_untracked(|p| {
+            attempt.with_untracked(|a| session::interpret(&transcript, p, a.arrows()))
+        });
+        match heard {
+            session::Heard::Draw { arrow, say } => {
+                attempt.update(|a| a.draw(arrow));
+                speech::say(&say);
+            }
+            session::Heard::Say(text) => speech::say(&text),
+            session::Heard::Command(command) => match command {
+                diction::Command::Submit => submit(()),
+                diction::Command::Undo => undo(()),
+                diction::Command::Clear => clear(()),
+                diction::Command::Next => next(()),
+                diction::Command::GiveUp => give_up(()),
+                diction::Command::Repeat => {
+                    speech::say(&position.with_untracked(|p| roster::of(p).speech()));
+                }
+            },
+        }
+    };
+    // Toggle the mic. Enabling reads the roster at once — that tap is the user gesture
+    // browsers demand before any speech, and hearing the puzzle is the hands-free start.
+    let toggle_mic = move |()| {
+        if listening.get_untracked() {
+            recognition::stop();
+            listening.set(false);
+        } else if recognition::start(handle_voice) {
+            listening.set(true);
+            speech::say(&position.with_untracked(|p| roster::of(p).speech()));
+        }
+    };
+
     // Arrow keys walk the reveal, like a Lichess analysis board — only while revealed,
     // so they never fight anything during solving. `prevent_default` stops the page
     // scrolling out from under the board on the same key. The listener is on the
@@ -265,9 +310,12 @@ pub fn App() -> impl IntoView {
                     pov=pov
                     flipped=flipped
                     sound=sound
+                    mic_supported=mic_supported
+                    listening=listening
                     on_flip=Callback::new(flip)
                     on_choose_pov=Callback::new(choose_pov)
                     on_toggle_sound=Callback::new(toggle_sound)
+                    on_toggle_mic=Callback::new(toggle_mic)
                 />
             </div>
 
@@ -425,14 +473,42 @@ fn BoardBar(
     #[prop(into)] pov: Signal<settings::Pov>,
     #[prop(into)] flipped: Signal<bool>,
     #[prop(into)] sound: Signal<bool>,
+    /// Whether this browser can do speech recognition at all. When `false` the mic
+    /// control is not rendered — the feature is simply absent rather than a dead button.
+    mic_supported: bool,
+    #[prop(into)] listening: Signal<bool>,
     #[prop(into)] on_flip: Callback<()>,
     #[prop(into)] on_choose_pov: Callback<settings::Pov>,
     #[prop(into)] on_toggle_sound: Callback<()>,
+    #[prop(into)] on_toggle_mic: Callback<()>,
 ) -> impl IntoView {
     view! {
         <div class="boardbar">
-            // Read-aloud toggle, first because it is the entry to the voice mode — one
-            // tap to have the puzzle (and later the verdict) spoken.
+            // Voice input: the mic, first, because speaking the solution is the point of
+            // the project. Only shown where recognition exists (Chrome/Edge/Android/iOS
+            // Safari), so it never appears as a control that cannot work.
+            {mic_supported
+                .then(|| {
+                    view! {
+                        <button
+                            class="button button--icon"
+                            class:button--on=move || listening.get()
+                            aria-pressed=move || listening.get().to_string()
+                            aria-label="Voice input"
+                            title=move || {
+                                if listening.get() {
+                                    "Listening — tap to stop"
+                                } else {
+                                    "Speak your moves"
+                                }
+                            }
+                            on:click=move |_| on_toggle_mic.run(())
+                        >
+                            {move || if listening.get() { "🎙️" } else { "🎤" }}
+                        </button>
+                    }
+                })}
+            // Read-aloud toggle: one tap to have the puzzle (and the verdict) spoken.
             <button
                 class="button button--icon"
                 class:button--on=move || sound.get()

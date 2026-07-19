@@ -56,11 +56,12 @@ These were explicitly decided by the user. Do not reopen without asking.
   hand-written vanilla JS — we keep its *conventions* but not its server, because
   dexterity is multi-user and real-time and this is neither.
 - **Voice mode — the point of the project.** The goal is hands-free, eyes-free: hear
-  the puzzle read aloud, speak the solution. **Sound output is built** (text-to-speech
-  reads the roster and the verdict); **voice input is the next phase** (speech
-  recognition → spoken move → arrow). The roster was modeled as structured data from the
-  start precisely so text / SVG / speech render from one source — that groundwork is what
-  makes the output half a thin wrapper. See "Voice mode" below.
+  the puzzle read aloud, speak the solution. Both halves are built: **sound output**
+  (text-to-speech reads the roster and the verdict) and **voice input** (speech
+  recognition → spoken move → arrow, via `diction` + `session::interpret` + `recognition`).
+  The roster was modeled as structured data from the start precisely so text / SVG / speech
+  render from one source — that groundwork is what makes the output half a thin wrapper. See
+  "Voice mode" below.
   - **Input grammar is standard algebraic notation** (`"knight f6"`, `"rook g f8"`,
     `"queen h5 mate"`), the user's explicit choice. Two rules they set, both load-bearing:
     **never penalise extra information** (a full from-square when not needed, a spoken
@@ -321,6 +322,11 @@ its only consumer. That is the line; it is not "no strings in core".
   core (`roster::text`) and `session` (`spoken`); this only hands a finished string to the
   browser, and degrades to silence where there is no voice. The one module here that is
   browser-only by nature, like `storage`.
+- `recognition` — the read-aloud output's mirror: speech *input*, a thin `inline_js` wrapper
+  over `webkitSpeechRecognition` (`is_supported()` / `start(on_transcript)` / `stop()`). No
+  logic with a right answer — *what a transcript means* is `session::interpret`; this only
+  starts and stops the recogniser and forwards each final transcript. Browser-only by
+  nature, and degrades to "unsupported" where there is no recognition. See "Voice input".
 - `storage` — the one `localStorage` seam (`read(key)` / `write(key, value)`), shared by
   `rating` and `settings` so the fallible steps to reach it — and the `get_item`/`set_item`
   that can itself fail — are not open-coded twice. The `window().local_storage()` handle is
@@ -676,10 +682,9 @@ default. Guarded by `reveal.spec.js`'s read-aloud test (toggle flips, persists a
 reload, speaking raises no page error — headless chromium's `speechSynthesis` has no voices
 so `speak()` is a silent no-op, which is exactly enough to prove the wiring never throws).
 
-**Voice input — the core parser is built (`diction`); the browser wiring is next.**
-Speech recognition (`webkitSpeechRecognition`) → spoken move → arrow. The hard, bug-prone
-half, so its brain lives in a pure, heavily tested core module and the browser only feeds
-it strings.
+**Voice input — built.** Speech recognition (`webkitSpeechRecognition`) → spoken move →
+arrow. The hard, bug-prone half, so its brain lives in pure, heavily tested modules
+(`diction` in core, `session::interpret` in web) and the browser only feeds it strings.
 
 `crates/blindfold-core/src/diction.rs` — two stages, split on purpose:
 
@@ -710,20 +715,40 @@ disambiguation structure, promotion-before-vs-after, extra-info acceptance, and 
 spoken phrase is misheard** — reproduce it as a `parse`/`resolve` test, then widen a
 homophone table or the structure rule.
 
-Still to build (the browser half):
+The browser half (built):
 
-- A `blindfold-web` `recognition` module wrapping `webkitSpeechRecognition` — thin, like
-  `speech`. It is **Chrome / Edge / Android Chrome / iOS Safari 14.5+**, *not* Firefox;
-  needs **mic permission**, needs **internet** (Chrome streams audio to Google), and needs
-  a **gesture to start**. So "never touch the device" is one tap to begin, then hands-free.
-- App wiring: feed each transcript to `parse`; a `Command` drives the existing
-  submit/undo/clear/next/give-up/announce actions; a move/castle is `resolve`d and either
-  drawn as an arrow, or spoken back as the question (`"which knight — d5 or f5?"`). SAN
-  resolves against a *position*, and move *k*'s position depends on the defense — so the
-  app resolves each spoken move against the line played forward using the **stored
-  solution's replies** as context (correct for the normal single-mate case), then the
-  existing `judge` verifies the assembled arrows against *all* defenses exactly as for
-  drawn ones.
+- `blindfold-web` `session::interpret(transcript, puzzle, arrows) -> Heard` is the bridge,
+  **pure and native-tested**. It `parse`s the transcript; a `Command` passes straight
+  through as `Heard::Command`; a move/castle is `resolve`d against the right position and
+  comes back as `Heard::Draw { arrow, say }` (the `say` reads the move back so an eyes-free
+  user knows it registered), or `Heard::Say(question)` for an ambiguity / needed promotion
+  / needed castle side / miss. **Which position** is the subtle part and the reason this is
+  not just `resolve`: the user is *k* moves into a line whose opponent replies they never
+  see, so `voice_position` plays the puzzle forward through the **stored solution's**
+  representative defenses (`mate::playback`, the same line a solve reveals) to the position
+  the (*k*+1)-th move is made from. Correct for the normal case of following the intended
+  mate; a dual that diverges misresolves and falls out as a spoken "try again", never a
+  wrong arrow. Pinned by `tests/session.rs`'s voice cases (resolve-and-read-back, command
+  pass-through, forward-play to a later move, ambiguity-asks-which, castle, end-of-line).
+- `blindfold-web` `recognition` wraps `webkitSpeechRecognition` via a small `inline_js`
+  block — *not* `web-sys`, whose recognition types are gated behind the
+  `web_sys_unstable_apis` cfg (a build flag on trunk/CI we avoid). It is **Chrome / Edge /
+  Android Chrome / iOS Safari 14.5+**, *not* Firefox; needs **mic permission**, **internet**
+  (Chrome streams audio to Google), and a **gesture to start**. `is_supported()` gates the
+  mic control so it is simply absent where recognition is not — including headless CI
+  chromium, which has no recognition service. Degrades to nothing like `speech` does.
+- `app` wiring: a mic button in `BoardBar` (shown only when supported) toggles listening;
+  enabling reads the roster aloud (that tap is the gesture browsers demand before speech).
+  Each final transcript goes to `interpret`, and the result drives the **same action
+  closures the buttons use** — `submit`/`undo`/`clear`/`next`/`give_up` and `draw` — so the
+  voice and pointer paths cannot diverge. Voice confirmations/questions speak through
+  `speech` **directly, not gated on the read-aloud `sound` toggle**: voice mode needs its
+  own feedback, and the enabling tap is the required gesture. Submit still runs the same
+  `judge`, so the assembled arrows are verified against *all* defenses exactly as drawn
+  ones are. **The browser flow itself is not e2e-tested** — headless chromium has no speech
+  recognition, so there is no way to feed it audio; the existing suite does prove the
+  `inline_js` module loads and `is_supported()` runs without error on page load, and the
+  decision logic is covered natively by `interpret`.
 
 ### Arrows are coloured per move, and duplicates fan apart
 

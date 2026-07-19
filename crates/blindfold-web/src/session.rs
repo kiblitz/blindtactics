@@ -17,8 +17,10 @@
 use crate::constants;
 use crate::rating;
 use blindfold_core::arrow;
+use blindfold_core::diction;
 use blindfold_core::mate;
 use blindfold_core::puzzle;
+use blindfold_core::roster;
 use shakmaty::Position as _;
 
 /// The user's puzzle set and their place in it.
@@ -361,6 +363,123 @@ pub fn spoken(solve: &Solve, solver: shakmaty::Color) -> String {
             }
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Voice input
+//
+// The bridge between `diction` (which knows nothing of a puzzle) and the app: a
+// spoken phrase becomes an action the app can take. Pure and native-tested here so
+// the component only has to feed it strings and act on the result. The parser and
+// resolver it leans on live in core; this adds the one thing they lack — *which
+// position* a spoken move is resolved against, given the user is part-way through a
+// line they cannot see.
+// ---------------------------------------------------------------------------
+
+/// What a spoken phrase resolved to — the action the app should take.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Heard {
+    /// A move was understood: draw this arrow, and read `say` back so a user who
+    /// cannot see the board knows it registered.
+    Draw { arrow: arrow::Arrow, say: String },
+    /// An app command (submit, undo, next, …). The app already knows how to run each.
+    Command(diction::Command),
+    /// Nothing to draw — a question to ask ("which knight?") or a plain miss ("I did
+    /// not catch that"). The app reads it aloud and waits for the next phrase.
+    Say(String),
+}
+
+// The fixed spoken replies. Named rather than inlined so the voice's copy lives in
+// one place, the way the rest of the app's constants do.
+const DIDNT_CATCH: &str = "I did not catch that.";
+const NOT_FOUND: &str = "I did not find that move. Try again.";
+const LINE_COMPLETE: &str = "That is the whole line. Say submit.";
+const ASK_PROMOTION: &str = "Promote to what?";
+const ASK_CASTLE_SIDE: &str = "Which side? Kingside or queenside.";
+
+/// Interpret one speech-recognition transcript against the current puzzle and the
+/// arrows drawn so far.
+///
+/// A [`diction::Command`] and an unrecognised phrase need no position. A move or a
+/// castle does — and *which* position is the subtle part: the user is some moves into
+/// a line whose opponent replies they never see, so the spoken move is resolved
+/// against the line played forward through the puzzle's **stored** defenses (see
+/// [`voice_position`]). Correct for the normal case where the user is following the
+/// intended mate; a dual that diverges from the stored line can misresolve, and then
+/// falls out as [`Heard::Say`] asking them to try again rather than a wrong arrow.
+pub fn interpret(transcript: &str, puzzle: &puzzle::Puzzle, arrows: &[arrow::Arrow]) -> Heard {
+    let intent = diction::parse(transcript);
+    match intent {
+        diction::Intent::Command(command) => Heard::Command(command),
+        diction::Intent::Unclear => Heard::Say(DIDNT_CATCH.to_owned()),
+        diction::Intent::Move(_) | diction::Intent::Castle(_) => {
+            let Some(pos) = voice_position(puzzle, arrows.len()) else {
+                return Heard::Say(LINE_COMPLETE.to_owned());
+            };
+            match diction::resolve(&intent, &pos).expect("a move or castle resolves") {
+                diction::Resolution::Move(arrow) => Heard::Draw {
+                    arrow,
+                    say: confirm(arrow, &pos),
+                },
+                diction::Resolution::Ambiguous(squares) => Heard::Say(ask_which(&squares)),
+                diction::Resolution::NeedsPromotion(_) => Heard::Say(ASK_PROMOTION.to_owned()),
+                diction::Resolution::NeedsCastleSide => Heard::Say(ASK_CASTLE_SIDE.to_owned()),
+                diction::Resolution::Illegal => Heard::Say(NOT_FOUND.to_owned()),
+            }
+        }
+    }
+}
+
+/// The position a spoken move number `moves_entered + 1` is resolved against: the
+/// puzzle played forward through `moves_entered` of its stored solver moves and the
+/// representative defenses between them.
+///
+/// `None` once the whole line is entered — there is no next move to resolve, which the
+/// app reports as "say submit". Uses [`mate::playback`]'s representative line (the same
+/// one a solve reveals) for the opponent replies, since the puzzle stores only the
+/// solver's arrows.
+fn voice_position(puzzle: &puzzle::Puzzle, moves_entered: usize) -> Option<shakmaty::Chess> {
+    let start = puzzle.position().ok()?;
+    if moves_entered == 0 {
+        return Some(start);
+    }
+    let steps = mate::playback(&start, &puzzle.solution)?;
+    // After `moves_entered` solver+defense pairs (2 plies each) it is the solver's
+    // move again — that is the position the next spoken move is resolved against.
+    step_at(&steps, 2 * moves_entered).map(|step| step.after.clone())
+}
+
+/// Read a resolved move back for confirmation — "knight F. 6", or "Castle kingside".
+///
+/// Spoken, not written: the squares go through [`roster::square_spoken`] so the file
+/// is read as a letter, exactly as the roster is. The piece is read off the board at
+/// the arrow's from-square, since the arrow itself does not carry a role.
+fn confirm(arrow: arrow::Arrow, pos: &shakmaty::Chess) -> String {
+    let role = pos.board().role_at(arrow.from);
+    // A castle is a king stepping two files; name the side rather than the squares.
+    if role == Some(shakmaty::Role::King) {
+        let files = i32::from(arrow.to.file()) - i32::from(arrow.from.file());
+        if files.abs() == 2 {
+            let side = if files > 0 { "kingside" } else { "queenside" };
+            return format!("Castle {side}.");
+        }
+    }
+    let name = role.map_or("piece", |r| roster::name(r, false));
+    match arrow.promotion {
+        Some(promo) => format!(
+            "{name} to {}, {}.",
+            roster::square_spoken(arrow.to),
+            roster::name(promo, false)
+        ),
+        None => format!("{name} to {}.", roster::square_spoken(arrow.to)),
+    }
+}
+
+/// "Which one? D. five or F. five." — the candidate from-squares of an ambiguous
+/// move, read aloud so the user can pick one by from-square.
+fn ask_which(squares: &[shakmaty::Square]) -> String {
+    let spoken: Vec<String> = squares.iter().map(|s| roster::square_spoken(*s)).collect();
+    format!("Which one? {}.", spoken.join(" or "))
 }
 
 /// The user's attempt at the current puzzle: the line drawn, the verdict once
