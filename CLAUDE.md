@@ -55,8 +55,20 @@ These were explicitly decided by the user. Do not reopen without asking.
   GitHub Pages with no server to run. The user's other project (`dexterity`) is Axum +
   hand-written vanilla JS — we keep its *conventions* but not its server, because
   dexterity is multi-user and real-time and this is neither.
-- **Audio is designed-for, not built yet.** The roster is modeled as structured data,
-  never a display string, so text / SVG / speech all render from one source.
+- **Voice mode — the point of the project.** The goal is hands-free, eyes-free: hear
+  the puzzle read aloud, speak the solution. **Sound output is built** (text-to-speech
+  reads the roster and the verdict); **voice input is the next phase** (speech
+  recognition → spoken move → arrow). The roster was modeled as structured data from the
+  start precisely so text / SVG / speech render from one source — that groundwork is what
+  makes the output half a thin wrapper. See "Voice mode" below.
+  - **Input grammar is standard algebraic notation** (`"knight f6"`, `"rook g f8"`,
+    `"queen h5 mate"`), the user's explicit choice. Two rules they set, both load-bearing:
+    **never penalise extra information** (a full from-square when not needed, a spoken
+    "takes"/"check"/"mate" — all accepted), and **never penalise missing information but
+    never auto-resolve it either** — an ambiguous `"knight f6"` with two knights available
+    must *ask* ("which knight?"), because guessing would hand over the answer and rejecting
+    would punish a legal intent. This parser is the most bug-prone part of the project and
+    gets the heaviest testing.
 - **Curation gates on roster size, not just chess validity.** A puzzle is only usable
   if a human can hold the position in their head. `MAX_ROSTER_SQUARES = 10`; see
   "The roster gate" below, and do not raise it without re-running the numbers.
@@ -291,13 +303,20 @@ its only consumer. That is the line; it is not "no strings in core".
 - `rating` — the Elo update (`update(user, puzzle, Outcome)`), and `load`/`save` over
   `localStorage`. The arithmetic is pure and native-tested; only the storage I/O needs
   a browser, and it is the only thing here that touches one.
-- `settings` — the persisted display preferences. One for now: `Pov` (`ToMove` / `White`
-  / `Black`), which side faces the user. `Pov::side(solver)` resolves it against who is to
+- `settings` — the persisted preferences, each under its own `localStorage` key so they
+  move independently. Two now: `Pov` (`ToMove` / `White` / `Black`), which side faces the
+  user, via `load_pov`/`save_pov`; and the read-aloud flag, via `load_sound`/`save_sound`
+  (off by default — audio is opt-in). `Pov::side(solver)` resolves it against who is to
   move, and `facing(pov, solver, flipped)` layers the transient per-puzzle flip on top —
   both pure and native-tested (the flip's *sign* especially, the same care `square` takes);
-  only `load`/`save` touch storage. `facing`, not `orientation`, so the call site reads
-  `square::Orientation(settings::facing(..))` rather than repeating the word. See "Which way
-  the board faces" below.
+  only the `load_*`/`save_*` pairs touch storage. `facing`, not `orientation`, so the call
+  site reads `square::Orientation(settings::facing(..))` rather than repeating the word. See
+  "Which way the board faces" below.
+- `speech` — the read-aloud output: a thin wrapper over the browser's `speechSynthesis`
+  (`say(text)` / `silence()`). No logic with a right answer — *what* to say is built in
+  core (`roster::text`) and `session` (`spoken`); this only hands a finished string to the
+  browser, and degrades to silence where there is no voice. The one module here that is
+  browser-only by nature, like `storage`.
 - `storage` — the one `localStorage` seam (`read(key)` / `write(key, value)`), shared by
   `rating` and `settings` so the fallible steps to reach it — and the `get_item`/`set_item`
   that can itself fail — are not open-coded twice. The `window().local_storage()` handle is
@@ -305,7 +324,9 @@ its only consumer. That is the line; it is not "no strings in core".
 - `database` — the committed JSONL, `include_str!`d.
 - `board`, `panel`, `line`, `app` — components. Markup and event plumbing only. `line`
   swaps its drawn-arrow list for the SAN `Movelist` once revealed; `app` holds the
-  window `keydown` listener that maps the arrow keys onto the reveal cursor.
+  window `keydown` listener that maps the arrow keys onto the reveal cursor, the two
+  announcement effects (read the roster on a new puzzle, speak the verdict on a solve),
+  and the read-aloud toggle in `BoardBar`.
 - `pieces` — Cburnett's artwork, taken from lila (GPLv2-or-later, so compatible with our
   GPL-3.0-or-later), compiled in. See `assets/pieces/README.md`.
 - `constants` — interface policy: board side, arrow geometry, Elo constants, selection
@@ -317,8 +338,8 @@ import a binary crate's modules. `main.rs` mounts the app and does nothing else.
 **Leptos's prelude is glob-imported** in the component modules, against the global
 no-wildcard rule. `view!` needs a large set of traits and types in scope and Leptos is
 built around it; this is the same exception the OCaml rules make for `Core`. The
-non-component modules (`square`, `session`, `rating`, `settings`, `storage`, `database`,
-`pieces`, `constants`) do not import it at all, which is the line worth holding.
+non-component modules (`square`, `session`, `rating`, `settings`, `speech`, `storage`,
+`database`, `pieces`, `constants`) do not import it at all, which is the line worth holding.
 
 ### The browser is the only place some bugs exist
 
@@ -569,6 +590,54 @@ are within the viewport** (nothing below the fold), and that a **touch-type poin
 (dispatched as `pointerType: "touch"`, the input a finger produces) draws an arrow. The
 reveal/step wiring is orientation- and size-independent, so it is not re-proved there — only
 the phone-specific concerns are.
+
+### Voice mode — the project's reason to exist
+
+The goal is hands-free, eyes-free: hear the puzzle, speak the solution, never look at or
+touch the device. It divides cleanly into two halves with very different risk profiles.
+
+**Sound output (built).** Text-to-speech via the browser's `speechSynthesis`, wrapped in
+`speech.rs` (`say`/`silence`). It works on every browser including iOS Safari and Android
+Chrome, works offline (OS voices), and needs no permission. The read-aloud toggle is a
+speaker button in the header row (`BoardBar`), persisted (`settings::load_sound`), off by
+default. When on:
+
+- A new puzzle is read aloud — `roster::text()`, the sentence the data model was built to
+  produce (`"white to play. white: king d5, bishops b4 c6…"`).
+- The verdict is spoken on submit/give-up — `session::spoken(solve, solver)`, the spoken
+  sibling of the panel's `Verdict`, reusing `explain` so the voice and the screen cannot
+  say different things, and holding the same discretion (never the move count, so no depth
+  leak).
+
+Two `Effect`s in `app` do the announcing: one subscribes to `position` (fires on load and
+every `next`), one to `solve` (fires when a verdict appears, not on a reveal step). Both
+read `sound` **untracked** so toggling it does not replay anything — the toggle owns the
+"just enabled, read the current puzzle" case, and it must, because **browsers require a
+user gesture before speaking**: the enabling click is that gesture. A page that tried to
+talk on load (sound persisted-on from a prior session) is refused and degrades to silence
+until the first interaction — acceptable, and the reason audio is opt-in rather than
+default. Guarded by `reveal.spec.js`'s read-aloud test (toggle flips, persists across a
+reload, speaking raises no page error — headless chromium's `speechSynthesis` has no voices
+so `speak()` is a silent no-op, which is exactly enough to prove the wiring never throws).
+
+**Voice input (next phase, not built).** Speech recognition (`webkitSpeechRecognition`) →
+spoken move → arrow. The hard, bug-prone half, so it is planned to land as a pure, heavily
+tested core module (`diction`): `parse` (transcript → fuzzy-SAN intent or a command like
+"submit"/"undo"/"next"/"repeat") and `resolve` (intent + position → one arrow, or
+ambiguous-needs-which, or illegal). Constraints already known and worth not re-deriving:
+
+- `webkitSpeechRecognition` is **Chrome / Edge / Android Chrome / iOS Safari 14.5+**, *not*
+  Firefox; it needs **mic permission**, needs **internet** (Chrome streams audio to
+  Google), and needs a **gesture to start**. So "never touch the device" is one tap to
+  begin a session, then hands-free.
+- SAN resolves against a *position*, and move *k*'s position depends on which defense the
+  opponent chose — which is not fixed in a linear puzzle. Plan: resolve each spoken move
+  against the line played forward using the **stored solution's replies** as context
+  (correct for the normal single-mate case), producing a concrete arrow, then let the
+  existing `judge` verify the arrows against *all* defenses exactly as it does for drawn
+  ones. A dual that diverges from the stored line falls back to asking for the full
+  from-square. The grammar rules from "Decisions" above (extra info never penalised;
+  missing info asked about, never auto-resolved and never rejected) live in `resolve`.
 
 ### Arrows are coloured per move, and duplicates fan apart
 

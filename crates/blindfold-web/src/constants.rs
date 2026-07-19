@@ -122,6 +122,9 @@ pub const ELO_STORAGE_KEY: &str = "blindfold.elo";
 /// The `localStorage` key the point-of-view preference persists under.
 pub const POV_STORAGE_KEY: &str = "blindfold.pov";
 
+/// The `localStorage` key the read-aloud (text-to-speech) preference persists under.
+pub const SOUND_STORAGE_KEY: &str = "blindfold.sound";
+
 /// How many of the closest-rated puzzles the next one is drawn from.
 ///
 /// Selection is "random, near your rating": the candidates are the

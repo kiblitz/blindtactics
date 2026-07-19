@@ -22,5 +22,6 @@ pub mod pieces;
 pub mod rating;
 pub mod session;
 pub mod settings;
+pub mod speech;
 pub mod square;
 pub mod storage;

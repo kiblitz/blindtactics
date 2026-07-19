@@ -329,6 +329,64 @@ fn explain_does_not_cry_promotion_for_an_ordinary_illegal_move() {
     assert!(message.to_lowercase().contains("not legal"));
 }
 
+// --- spoken (read-aloud verdict) ---------------------------------------------
+
+/// A solve is announced as a mate, and — like the panel — the spoken verdict never
+/// names a move count, which would leak the puzzle's depth.
+#[test]
+fn spoken_announces_a_mate_without_leaking_the_depth() {
+    let solved = session::spoken(
+        &session::Solve::Solved(solved_steps()),
+        shakmaty::Color::White,
+    );
+    assert!(
+        solved.to_lowercase().contains("mate"),
+        "a solve must be announced as a mate, got: {solved}"
+    );
+    for verdict in [
+        session::Solve::Solved(solved_steps()),
+        session::Solve::GaveUp(solved_steps()),
+        session::Solve::Overshot { mate_at: 1 },
+    ] {
+        let spoken = session::spoken(&verdict, shakmaty::Color::White);
+        assert!(
+            !spoken.chars().any(|c| c.is_ascii_digit()),
+            "the spoken verdict must not reveal a move count, got: {spoken}"
+        );
+    }
+}
+
+/// The spoken verdict and the panel's must say the same thing about a refutation:
+/// `spoken` reuses `explain` rather than phrasing it a second way, so the voice mode
+/// and the screen cannot drift.
+#[test]
+fn spoken_reuses_explain_for_a_refutation() {
+    let reason = mate::Reason::Stalemate;
+    let refuted = session::Solve::Refuted {
+        defense: Vec::new(),
+        reason: reason.clone(),
+    };
+    assert_eq!(
+        session::spoken(&refuted, shakmaty::Color::White),
+        session::explain(&reason, shakmaty::Color::White),
+    );
+}
+
+/// An unfinished promotion is a fixable entry, not a wrong answer, so its spoken form
+/// is the same promotion hint the panel gives — never a bare "illegal".
+#[test]
+fn spoken_hints_at_promotion_for_an_unfinished_pawn_move() {
+    let promoting = arrow(shakmaty::Square::G7, shakmaty::Square::G8);
+    let spoken = session::spoken(
+        &session::Solve::Incomplete(promoting),
+        shakmaty::Color::White,
+    );
+    assert!(
+        spoken.to_lowercase().contains("promote"),
+        "an unfinished promotion must hint at promotion aloud, got: {spoken}"
+    );
+}
+
 // --- Attempt -----------------------------------------------------------------
 
 #[test]

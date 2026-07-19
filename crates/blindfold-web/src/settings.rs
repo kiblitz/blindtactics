@@ -1,9 +1,11 @@
-//! The user's display preferences, and where they are kept.
+//! The user's preferences, and where they are kept.
 //!
-//! Like [`crate::rating`], the logic is browser-free and native-tested; only
-//! [`load`]/[`save`] touch `localStorage` (via [`crate::storage`]). One preference
-//! for now — which side of the board faces the user — but the module is the seam a
-//! settings menu grows against, so a second one is a variant here, not a rewrite.
+//! Like [`crate::rating`], the logic is browser-free and native-tested; only the
+//! `load_*`/`save_*` pairs touch `localStorage` (via [`crate::storage`]). Two
+//! preferences: which side of the board faces the user ([`Pov`]), and whether the
+//! puzzle and verdict are read aloud ([`load_sound`]). Each persists under its own
+//! key so they move independently, and the module is the seam more settings grow
+//! against — a third is another pair here, not a rewrite.
 
 use crate::constants;
 use crate::storage;
@@ -85,7 +87,7 @@ pub fn facing(pov: Pov, solver: shakmaty::Color, flipped: bool) -> shakmaty::Col
 /// The stored POV, or [`Pov::ToMove`] for a browser that has none or a value we no
 /// longer recognise. A corrupt token is not something the user can act on, so the
 /// default is the right recovery rather than an error.
-pub fn load() -> Pov {
+pub fn load_pov() -> Pov {
     storage::read(constants::POV_STORAGE_KEY)
         .and_then(|raw| Pov::from_token(&raw))
         .unwrap_or_default()
@@ -93,6 +95,28 @@ pub fn load() -> Pov {
 
 /// Persist the POV. Silent if `localStorage` is unavailable — the preference then
 /// simply does not survive a reload, a graceful degradation rather than a failure.
-pub fn save(pov: Pov) {
+pub fn save_pov(pov: Pov) {
     storage::write(constants::POV_STORAGE_KEY, pov.token());
 }
+
+/// Whether the puzzle and verdict are read aloud. Off unless the browser has
+/// explicitly stored `on` — audio starts silent and is opt-in, both because it needs
+/// a user gesture to begin and because a page that talks on load is a surprise.
+pub fn load_sound() -> bool {
+    storage::read(constants::SOUND_STORAGE_KEY).as_deref() == Some(SOUND_ON)
+}
+
+/// Persist the read-aloud preference. Silent if `localStorage` is unavailable, like
+/// [`save_pov`].
+pub fn save_sound(on: bool) {
+    storage::write(
+        constants::SOUND_STORAGE_KEY,
+        if on { SOUND_ON } else { SOUND_OFF },
+    );
+}
+
+/// The stored tokens for the read-aloud flag — spelled out rather than
+/// `bool::to_string`, for the same reason [`Pov::token`] is: the on-disk value is a
+/// contract, not an incidental of how a `bool` prints.
+const SOUND_ON: &str = "on";
+const SOUND_OFF: &str = "off";

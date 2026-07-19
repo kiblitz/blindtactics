@@ -7,6 +7,7 @@ use crate::panel;
 use crate::rating;
 use crate::session;
 use crate::settings;
+use crate::speech;
 use crate::square;
 use blindfold_core::arrow;
 use blindfold_core::roster;
@@ -25,7 +26,12 @@ pub fn App() -> impl IntoView {
 
     // Which side faces the user, persisted across reloads. The per-puzzle flip that
     // layers on top of it lives in the `attempt` below, transient by design.
-    let pov = RwSignal::new(settings::load());
+    let pov = RwSignal::new(settings::load_pov());
+
+    // Whether the puzzle and verdict are read aloud, persisted. Off by default: audio
+    // needs a user gesture to start (the enabling click), and a page that talks on
+    // load would be a surprise. The announcement effects below read this.
+    let sound = RwSignal::new(settings::load_sound());
 
     // The whole attempt in one signal, so its reset invariant lives in one place a
     // native test can reach — see `session::Attempt`.
@@ -132,7 +138,20 @@ pub fn App() -> impl IntoView {
     let choose_pov = move |chosen: settings::Pov| {
         if pov.get_untracked() != chosen {
             pov.set(chosen);
-            settings::save(chosen);
+            settings::save_pov(chosen);
+        }
+    };
+    // Toggle read-aloud, persist it, and act at once: on enabling, read the current
+    // puzzle (the enabling click is the user gesture browsers require before speech);
+    // on muting, stop any speech mid-sentence rather than letting it finish.
+    let toggle_sound = move |()| {
+        let on = !sound.get_untracked();
+        sound.set(on);
+        settings::save_sound(on);
+        if on {
+            speech::say(&position.with_untracked(|p| roster::of(p).text()));
+        } else {
+            speech::silence();
         }
     };
     let undo = move |()| attempt.update(session::Attempt::undo);
@@ -165,6 +184,31 @@ pub fn App() -> impl IntoView {
         }
     });
     on_cleanup(move || keydown.remove());
+
+    // Read the puzzle aloud when a new one is served, if sound is on. Subscribes to
+    // `position` (so it fires on load and on every `next`) but reads `sound`
+    // untracked — toggling sound must not re-read the roster through here; that is the
+    // toggle's own job, which also owns the enabling gesture. On the very first run
+    // with sound persisted-on, the browser may refuse for lack of a gesture; that
+    // degrades to silence until the first interaction, which is acceptable.
+    Effect::new(move |_| {
+        let text = position.with(|p| roster::of(p).text());
+        if sound.get_untracked() {
+            speech::say(&text);
+        }
+    });
+
+    // Speak the verdict the moment a submission or give-up produces one. Subscribes to
+    // `solve` only: it fires when the verdict appears, not when the reveal is stepped
+    // (that changes `ply`, not `solve`) and not when sound is toggled (read untracked,
+    // so enabling sound after solving does not replay the verdict).
+    Effect::new(move |_| {
+        if let Some(verdict) = solve.get() {
+            if sound.get_untracked() {
+                speech::say(&session::spoken(&verdict, solver.get_untracked()));
+            }
+        }
+    });
 
     // The position the board draws: `None` while the user is still blind, then the
     // start position, then each ply the reveal has been stepped to. Stepped by hand
@@ -217,8 +261,10 @@ pub fn App() -> impl IntoView {
                 <BoardBar
                     pov=pov
                     flipped=flipped
+                    sound=sound
                     on_flip=Callback::new(flip)
                     on_choose_pov=Callback::new(choose_pov)
+                    on_toggle_sound=Callback::new(toggle_sound)
                 />
             </div>
 
@@ -375,11 +421,25 @@ fn Facts(session: RwSignal<session::Session>) -> impl IntoView {
 fn BoardBar(
     #[prop(into)] pov: Signal<settings::Pov>,
     #[prop(into)] flipped: Signal<bool>,
+    #[prop(into)] sound: Signal<bool>,
     #[prop(into)] on_flip: Callback<()>,
     #[prop(into)] on_choose_pov: Callback<settings::Pov>,
+    #[prop(into)] on_toggle_sound: Callback<()>,
 ) -> impl IntoView {
     view! {
         <div class="boardbar">
+            // Read-aloud toggle, first because it is the entry to the voice mode — one
+            // tap to have the puzzle (and later the verdict) spoken.
+            <button
+                class="button button--icon"
+                class:button--on=move || sound.get()
+                aria-pressed=move || sound.get().to_string()
+                aria-label="Read aloud"
+                title=move || if sound.get() { "Reading aloud — tap to mute" } else { "Read the puzzle aloud" }
+                on:click=move |_| on_toggle_sound.run(())
+            >
+                {move || if sound.get() { "🔊" } else { "🔈" }}
+            </button>
             <button
                 class="button button--icon"
                 class:button--on=move || flipped.get()

@@ -332,6 +332,37 @@ pub fn explain(reason: &mate::Reason, solver: shakmaty::Color) -> String {
     }
 }
 
+/// The verdict as one sentence to read aloud.
+///
+/// The spoken sibling of the [`crate::line`] `Verdict` component: the same
+/// classification, rendered to plain speech instead of markup, so the voice mode and
+/// the panel cannot tell the user two different things about the same result. It
+/// reuses [`explain`] for the cases the panel does, and holds to the same discretion
+/// — it never speaks the move count (which would leak the puzzle's depth) and, for a
+/// refutation, it says *why* the line fails but not the defending coordinates, which
+/// read as noise aloud and are on screen for anyone who wants them.
+pub fn spoken(solve: &Solve, solver: shakmaty::Color) -> String {
+    match solve {
+        Solve::Solved(_) => "Checkmate.".to_string(),
+        Solve::GaveUp(_) => "You gave up. Here is the forced mate.".to_string(),
+        Solve::Overshot { .. } => {
+            "That line mates before its last move. Trim the moves after the mate.".to_string()
+        }
+        Solve::Incomplete(a) => explain(&mate::Reason::Illegal(*a), solver),
+        Solve::Refuted { reason, .. } => explain(reason, solver),
+        Solve::Unjudged(limit) => match limit {
+            mate::Limit::Length { moves } => format!(
+                "That is {moves} moves; this trainer judges up to {}.",
+                blindfold_core::constants::MAX_LINE,
+            ),
+            mate::Limit::Frontier { .. } => {
+                "That line branches too far to check — not a verdict on whether it works."
+                    .to_string()
+            }
+        },
+    }
+}
+
 /// The user's attempt at the current puzzle: the line drawn, the verdict once
 /// submitted, and the reveal's cursor.
 ///
