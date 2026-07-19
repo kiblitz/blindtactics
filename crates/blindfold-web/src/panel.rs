@@ -19,9 +19,10 @@ use leptos::prelude::*;
 /// the side to move first.
 ///
 /// The speak button reads the roster aloud on demand — always present, whatever the
-/// output mode, because that setting governs only *automatic* reading. It sits in the
-/// piece-list panel because that is what it reads; the click is also the user gesture
-/// browsers require before any speech.
+/// output mode, because that setting governs only *automatic* reading. It sits inline
+/// with the "to play" lede because that is what it reads, and because the title above
+/// is hidden on a phone — leaving it beside the title would strand it on its own row.
+/// The click is also the user gesture browsers require before any speech.
 #[component]
 pub fn Roster(
     #[prop(into)] roster: Signal<roster::Roster>,
@@ -29,8 +30,17 @@ pub fn Roster(
 ) -> impl IntoView {
     view! {
         <section class="panel" aria-label="Piece locations">
-            <div class="panel__head">
-                <h2 class="panel__title">"Roster"</h2>
+            <h2 class="panel__title">"Roster"</h2>
+
+            <div class="panel__lede">
+                <p class="panel__tomove">
+                    {move || {
+                        format!(
+                            "{} to play. Find the forced mate.",
+                            roster::heading(roster.get().to_move),
+                        )
+                    }}
+                </p>
                 <button
                     class="button button--icon panel__speak"
                     aria-label="Read the roster aloud"
@@ -40,12 +50,6 @@ pub fn Roster(
                     "🔊"
                 </button>
             </div>
-
-            <p class="panel__tomove">
-                {move || {
-                    format!("{} to play. Find the forced mate.", roster::heading(roster.get().to_move))
-                }}
-            </p>
 
             {move || {
                 let r = roster.get();

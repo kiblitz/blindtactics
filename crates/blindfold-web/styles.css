@@ -399,8 +399,11 @@ body {
     display: none;
   }
 
-  .layout__roster .panel__tomove {
+  .layout__roster .panel__lede {
     margin-bottom: 0.35rem;
+  }
+
+  .layout__roster .panel__tomove {
     font-size: 0.9rem;
   }
 
@@ -650,19 +653,16 @@ body {
   color: var(--chalk-faint);
 }
 
-/* The roster panel's header row: the title on the left, the speak button on the
- * right. The title's own bottom margin is dropped here and carried by the row, so the
- * button does not sit on top of a gap. */
-.panel__head {
+/* The "to play" lede shares its row with the speak button: text on the left, the
+ * 🔊 pushed to the right. Inline here rather than beside the title because the title
+ * is hidden on a phone, which would otherwise strand the button alone on its own row.
+ * The row carries the lede's bottom margin so the button does not sit over a gap. */
+.panel__lede {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  margin-bottom: 0.8rem;
-}
-
-.panel__head .panel__title {
-  margin: 0;
+  margin-bottom: 0.9rem;
 }
 
 .panel__speak {
@@ -670,7 +670,7 @@ body {
 }
 
 .panel__tomove {
-  margin: 0 0 0.9rem;
+  margin: 0;
   font-family: var(--serif);
   font-size: 1.05rem;
   color: var(--amber);
