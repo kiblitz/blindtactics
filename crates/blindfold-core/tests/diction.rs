@@ -135,6 +135,44 @@ fn recogniser_homophones_are_understood() {
 }
 
 #[test]
+fn a_rook_that_swallowed_its_file_is_recovered() {
+    // Real mishears from a live session: Chrome heard "rook e8" as "rookie 8" and "rook b8"
+    // as "rugby 8", gluing the file into an everyday word. Left whole these lose the *file*
+    // and the move has no destination at all, so they must expand back to role + file.
+    assert_eq!(
+        parse("rookie 8"),
+        a_move(
+            Some(shakmaty::Role::Rook),
+            None,
+            None,
+            shakmaty::Square::E8,
+            None
+        )
+    );
+    assert_eq!(
+        parse("rugby 8"),
+        a_move(
+            Some(shakmaty::Role::Rook),
+            None,
+            None,
+            shakmaty::Square::B8,
+            None
+        )
+    );
+    // And "rook" heard as "look" (role only lost, destination intact).
+    assert_eq!(
+        parse("look a8"),
+        a_move(
+            Some(shakmaty::Role::Rook),
+            None,
+            None,
+            shakmaty::Square::A8,
+            None
+        )
+    );
+}
+
+#[test]
 fn a_from_file_disambiguates() {
     // "rook g f8" — the earlier file is the disambiguator, the last file+rank the target.
     assert_eq!(

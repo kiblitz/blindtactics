@@ -235,13 +235,34 @@ fn segment_end(words: &[Word], from: usize) -> usize {
 }
 
 /// Tokenise a transcript into classified [`Word`]s: split on non-alphanumerics, break
-/// glued coordinates like `"f6"` into `["f", "6"]`, and classify each.
+/// glued coordinates like `"f6"` into `["f", "6"]`, expand glued mishears like `"rookie"`
+/// into `["rook", "e"]`, and classify each.
 fn classify_all(transcript: &str) -> Vec<Word> {
     transcript
         .split(|c: char| !c.is_ascii_alphanumeric())
         .flat_map(split_letters_from_digits)
+        .flat_map(|w| expand_compound(&w))
         .map(|w| classify(&w))
         .collect()
+}
+
+/// A few recogniser mishears glue a role and its file into one everyday word: Chrome
+/// confidently returns `"rookie"` for "rook e" and `"rugby"` for "rook b". Left whole
+/// these are noise, and — worse than losing the role — they take the *file* down with
+/// them, so the move has no destination at all and the whole phrase drops. Expand the
+/// known ones back into their two intended tokens; anything else passes through unchanged.
+///
+/// Only real English words a recogniser emits *confidently* belong here (a rare made-up
+/// glue like "rook-c" is returned as two words on its own). The role-only mishears —
+/// "look"/"rock" for rook — do not need expanding: they lose only the role, which
+/// [`role_word`] recovers, and the destination survives to resolve on its own.
+fn expand_compound(word: &str) -> Vec<String> {
+    let split: &[&str] = match word.to_ascii_lowercase().as_str() {
+        "rookie" | "rookies" | "rooky" => &["rook", "e"],
+        "rugby" => &["rook", "b"],
+        _ => return vec![word.to_owned()],
+    };
+    split.iter().map(|&s| s.to_owned()).collect()
 }
 
 /// Build a [`Move`] from one move's worth of classified words, or `None` if there is no
@@ -504,7 +525,7 @@ fn role_word(word: &str) -> Option<shakmaty::Role> {
     Some(match word {
         "king" | "kings" => shakmaty::Role::King,
         "queen" | "queens" | "quinn" => shakmaty::Role::Queen,
-        "rook" | "rooks" | "rock" | "ruck" => shakmaty::Role::Rook,
+        "rook" | "rooks" | "rock" | "ruck" | "look" => shakmaty::Role::Rook,
         "bishop" | "bishops" | "bish" => shakmaty::Role::Bishop,
         "knight" | "knights" | "night" | "nights" | "nite" => shakmaty::Role::Knight,
         "pawn" | "pawns" | "paun" => shakmaty::Role::Pawn,
