@@ -1,30 +1,38 @@
-name: Deploy to Netlify
+name: Deploy to GitHub Pages
 
-# Same shape as the sibling `language-notes` project: build the static site on a
-# push to `main`, then force-push the built `dist/` to a `deploy` branch. Netlify
-# is pointed at that branch in its dashboard and serves whatever lands there, so
-# the source branch stays clean of build artifacts and Netlify never has to run a
-# wasm toolchain of its own.
+# Build the static site on a push to `main` and publish it to GitHub Pages via the
+# official Pages actions — no `deploy` branch, no third-party host. Pages serves the
+# uploaded artifact directly and supports a custom domain (set in repo Settings →
+# Pages, which persists across Actions deploys).
+#
+# **Deliberately ungated**, as the Netlify pipeline was: this does not wait on the
+# `check` / `e2e` jobs, so a push that compiles ships even if a test would fail — the
+# lower-scrutiny working agreement for this repo. It only *builds*; correctness is
+# CI's job.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# One deploy at a time; a newer push supersedes an in-flight one.
+# The permissions the Pages deploy needs: read the repo, write a Pages deployment, and
+# mint the OIDC token `deploy-pages` uses to authenticate.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One Pages deploy at a time; a newer push supersedes an in-flight one.
 concurrency:
-  group: deploy
+  group: pages
   cancel-in-progress: true
 
-# NOTE: this workflow only produces the `deploy` branch. Serving it is a one-time
-# Netlify dashboard step: point a site at the `deploy` branch with an empty build
-# command and the repo root as the publish directory. See README / the PR notes.
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    # Scoped to the job (tighter than workflow-wide): the deploy step force-pushes
-    # the `deploy` branch, which needs write access to the repo.
-    permissions:
-      contents: write
+    # The deployment's URL is surfaced on the job and in the Environments tab.
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -46,23 +54,19 @@ jobs:
           curl -fsSL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
             | tar -xzf - -C "$HOME/.cargo/bin"
 
-      # Trunk.toml sets public_url = "./", so the bundle's asset links are relative
-      # and serve correctly at Netlify's domain root. Output lands in
-      # crates/blindfold-web/dist.
+      # Trunk.toml sets public_url = "./", so the bundle's asset links are relative and
+      # serve correctly both from a project subpath (`user.github.io/repo/`) and from a
+      # custom domain's root. Output lands in crates/blindfold-web/dist.
       - name: Build site
         working-directory: crates/blindfold-web
         run: trunk build --release
 
-      # Publish the built bundle to the `deploy` branch, mirroring language-notes:
-      # a throwaway repo rooted at dist/, force-pushed so `deploy` always holds
-      # exactly the current build and nothing else.
-      - name: Deploy to deploy branch
-        run: |
-          SHA=$(git rev-parse --short HEAD)
-          cd crates/blindfold-web/dist
-          git init
-          git checkout -b deploy
-          git add -A
-          git -c user.name="github-actions" -c user.email="github-actions@github.com" \
-            commit -m "deploy ${SHA}"
-          git push --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" deploy:deploy
+      # Package dist/ as a Pages artifact and hand it to the Pages deployment.
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: crates/blindfold-web/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
