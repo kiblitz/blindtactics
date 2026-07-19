@@ -229,8 +229,10 @@ pub fn App() -> impl IntoView {
     };
 
     // (Re)start the silence countdown from the configured seconds. Every heard phrase
-    // calls this, so the timer only elapses after a real silence; on reaching zero it
-    // `deafen`s, so the record control goes neutral on its own.
+    // calls this, so the timer only elapses after a real silence. Silence marks the end
+    // of the spoken line: on reaching zero it *submits* what was said, then `deafen`s so
+    // the record control goes neutral on its own. The user speaks the whole line, stops,
+    // and the pause is the "submit".
     let start_countdown = move || {
         countdown.set(Some(silence_secs.get_untracked()));
         if interval.get_untracked().is_some() {
@@ -240,6 +242,14 @@ pub fn App() -> impl IntoView {
             move || {
                 let remaining = countdown.get_untracked().unwrap_or(0).saturating_sub(1);
                 if remaining == 0 {
+                    // Submit the assembled line — but only when there is one to judge and
+                    // the board is not already revealed. A silence over an empty or solved
+                    // line just turns the mic off (submitting nothing would score a loss).
+                    let ready =
+                        attempt.with_untracked(|a| !a.arrows().is_empty() && !a.is_revealed());
+                    if ready {
+                        submit(());
+                    }
                     deafen();
                 } else {
                     countdown.set(Some(remaining));
@@ -259,11 +269,10 @@ pub fn App() -> impl IntoView {
         match heard {
             // Stream the provisional move onto the board while the user is still
             // speaking (interim), and commit it only when the phrase settles (final).
-            session::Heard::Draw { arrow, say } => {
+            session::Heard::Draw { arrow } => {
                 if is_final {
                     preview.set(None);
                     attempt.update(|a| a.draw(arrow));
-                    speech::say(&say);
                 } else {
                     preview.set(Some(arrow));
                 }

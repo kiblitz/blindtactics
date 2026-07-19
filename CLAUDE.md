@@ -710,10 +710,14 @@ row): a 🎤 glyph when idle, a pulsing red disc showing the live silence countd
 It toggles the mic and records the user's *intent* (`mic_desired`); a per-puzzle `Effect`
 re-arms from `Input::arms_next(mic_desired)` on each new puzzle — `Draw` resets to off, `Speak`
 carries the last state. While listening, a countdown (`silence_secs`, a stepper setting) runs
-on a 1-second interval, reset by every heard phrase; at zero it turns the mic off — but does
-*not* touch `mic_desired`, so a silence timeout in `Speak` mode still re-arms next puzzle
-(only the user pressing the button counts as intent). Interim transcripts stream a `preview`
-ghost arrow onto the board; a final transcript commits it.
+on a 1-second interval, reset by every heard phrase; **at zero it submits the assembled line,
+then turns the mic off** — the user speaks the whole line, stops, and the pause *is* the
+submit. It submits only when a line is drawn and the board is not already revealed (a silence
+over an empty or solved line just deafens; submitting nothing would score a loss). The
+timeout does *not* touch `mic_desired`, so a silence timeout in `Speak` mode still re-arms next
+puzzle (only the user pressing the button counts as intent). Interim transcripts stream a
+`preview` ghost arrow onto the board; a final transcript commits it — with **no spoken
+read-back** (repeating each move aloud was found to be noise; the drawn arrow is the feedback).
 
 **Voice input — built.** Speech recognition (`webkitSpeechRecognition`) → spoken move →
 arrow. The hard, bug-prone half, so its brain lives in pure, heavily tested modules
@@ -753,15 +757,15 @@ The browser half (built):
 - `blindfold-web` `session::interpret(transcript, puzzle, arrows) -> Heard` is the bridge,
   **pure and native-tested**. It `parse`s the transcript; a `Command` passes straight
   through as `Heard::Command`; a move/castle is `resolve`d against the right position and
-  comes back as `Heard::Draw { arrow, say }` (the `say` reads the move back so an eyes-free
-  user knows it registered), or `Heard::Say(question)` for an ambiguity / needed promotion
+  comes back as `Heard::Draw { arrow }` (drawn silently — see the read-back note below), or
+  `Heard::Say(question)` for an ambiguity / needed promotion
   / needed castle side / miss. **Which position** is the subtle part and the reason this is
   not just `resolve`: the user is *k* moves into a line whose opponent replies they never
   see, so `voice_position` plays the puzzle forward through the **stored solution's**
   representative defenses (`mate::playback`, the same line a solve reveals) to the position
   the (*k*+1)-th move is made from. Correct for the normal case of following the intended
   mate; a dual that diverges misresolves and falls out as a spoken "try again", never a
-  wrong arrow. Pinned by `tests/session.rs`'s voice cases (resolve-and-read-back, command
+  wrong arrow. Pinned by `tests/session.rs`'s voice cases (resolve-to-an-arrow, command
   pass-through, forward-play to a later move, ambiguity-asks-which, castle, end-of-line).
 - `blindfold-web` `recognition` wraps `webkitSpeechRecognition` via a small `inline_js`
   block — *not* `web-sys`, whose recognition types are gated behind the
@@ -791,9 +795,11 @@ The browser half (built):
   a later verdict. Each transcript goes to `interpret`; a **final** result drives the **same action
   closures the buttons use** — `submit`/`undo`/`clear`/`next`/`give_up` and `draw` — while an
   **interim** result only streams a `preview` ghost arrow (so a half-said "sub…" cannot fire
-  submit). Voice confirmations/questions speak through `speech` **directly, not gated on the
-  `Output` mode**: voice mode needs its own feedback, and the arming tap is the required
-  gesture. Submit still runs the same `judge`, so the assembled arrows are verified against
+  submit). A drawn move gets **no spoken read-back** (the arrow is the feedback); only the
+  voice's *questions and misses* (ambiguity, needed promotion, "try again") speak, through
+  `speech` **directly, not gated on the `Output` mode** — voice mode needs its own feedback,
+  and the arming tap is the required gesture. Submit still runs the same `judge`, so the
+  assembled arrows are verified against
   *all* defenses exactly as drawn ones are. **The browser flow itself is not e2e-tested** —
   headless chromium has no speech recognition, so there is no way to feed it audio; the
   existing suite does prove the `inline_js` module loads and `is_supported()` runs without

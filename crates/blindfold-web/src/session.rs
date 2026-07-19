@@ -379,9 +379,10 @@ pub fn spoken(solve: &Solve, solver: shakmaty::Color) -> String {
 /// What a spoken phrase resolved to — the action the app should take.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Heard {
-    /// A move was understood: draw this arrow, and read `say` back so a user who
-    /// cannot see the board knows it registered.
-    Draw { arrow: arrow::Arrow, say: String },
+    /// A move was understood: draw this arrow. No spoken read-back — repeating each
+    /// move aloud was found to be noise; the drawn arrow (and the streamed preview) is
+    /// the feedback.
+    Draw { arrow: arrow::Arrow },
     /// An app command (submit, undo, next, …). The app already knows how to run each.
     Command(diction::Command),
     /// Nothing to draw — a question to ask ("which knight?") or a plain miss ("I did
@@ -417,10 +418,7 @@ pub fn interpret(transcript: &str, puzzle: &puzzle::Puzzle, arrows: &[arrow::Arr
                 return Heard::Say(LINE_COMPLETE.to_owned());
             };
             match diction::resolve(&intent, &pos).expect("a move or castle resolves") {
-                diction::Resolution::Move(arrow) => Heard::Draw {
-                    arrow,
-                    say: confirm(arrow, &pos),
-                },
+                diction::Resolution::Move(arrow) => Heard::Draw { arrow },
                 diction::Resolution::Ambiguous(squares) => Heard::Say(ask_which(&squares)),
                 diction::Resolution::NeedsPromotion(_) => Heard::Say(ASK_PROMOTION.to_owned()),
                 diction::Resolution::NeedsCastleSide => Heard::Say(ASK_CASTLE_SIDE.to_owned()),
@@ -447,32 +445,6 @@ fn voice_position(puzzle: &puzzle::Puzzle, moves_entered: usize) -> Option<shakm
     // After `moves_entered` solver+defense pairs (2 plies each) it is the solver's
     // move again — that is the position the next spoken move is resolved against.
     step_at(&steps, 2 * moves_entered).map(|step| step.after.clone())
-}
-
-/// Read a resolved move back for confirmation — "knight F. 6", or "Castle kingside".
-///
-/// Spoken, not written: the squares go through [`roster::square_spoken`] so the file
-/// is read as a letter, exactly as the roster is. The piece is read off the board at
-/// the arrow's from-square, since the arrow itself does not carry a role.
-fn confirm(arrow: arrow::Arrow, pos: &shakmaty::Chess) -> String {
-    let role = pos.board().role_at(arrow.from);
-    // A castle is a king stepping two files; name the side rather than the squares.
-    if role == Some(shakmaty::Role::King) {
-        let files = i32::from(arrow.to.file()) - i32::from(arrow.from.file());
-        if files.abs() == 2 {
-            let side = if files > 0 { "kingside" } else { "queenside" };
-            return format!("Castle {side}.");
-        }
-    }
-    let name = role.map_or("piece", |r| roster::name(r, false));
-    match arrow.promotion {
-        Some(promo) => format!(
-            "{name} to {}, {}.",
-            roster::square_spoken(arrow.to),
-            roster::name(promo, false)
-        ),
-        None => format!("{name} to {}.", roster::square_spoken(arrow.to)),
-    }
 }
 
 /// "Which one? D. five or F. five." — the candidate from-squares of an ambiguous

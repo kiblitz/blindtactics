@@ -787,13 +787,12 @@ const TWO_KNIGHTS: &str = "4k3/8/8/8/8/8/3N1N2/4K3 w - - 0 1";
 const BOTH_CASTLES: &str = "4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1";
 
 #[test]
-fn a_spoken_move_resolves_to_an_arrow_and_is_read_back() {
+fn a_spoken_move_resolves_to_an_arrow() {
     let puzzle = voice_puzzle(MATE_IN_1, "a1a8");
     assert_eq!(
         session::interpret("rook a8", &puzzle, &[]),
         session::Heard::Draw {
             arrow: "a1a8".parse().unwrap(),
-            say: "rook to A8.".to_owned(),
         }
     );
 }
@@ -829,16 +828,12 @@ fn a_later_move_resolves_against_the_line_played_forward() {
     let first = "f6g6".parse::<arrow::Arrow>().unwrap();
     assert_eq!(
         session::interpret("king g6", &puzzle, &[]),
-        session::Heard::Draw {
-            arrow: first,
-            say: "king to G6.".to_owned(),
-        }
+        session::Heard::Draw { arrow: first }
     );
     assert_eq!(
         session::interpret("rook b8", &puzzle, &[first]),
         session::Heard::Draw {
             arrow: "b1b8".parse().unwrap(),
-            say: "rook to B8.".to_owned(),
         }
     );
 }
@@ -866,13 +861,12 @@ fn an_ambiguous_move_is_read_back_as_a_question_not_guessed() {
 }
 
 #[test]
-fn a_named_castle_resolves_and_is_read_back_as_a_castle() {
+fn a_named_castle_resolves_to_the_king_travel_arrow() {
     let puzzle = voice_puzzle(BOTH_CASTLES, "e1g1");
     assert_eq!(
         session::interpret("castle kingside", &puzzle, &[]),
         session::Heard::Draw {
             arrow: "e1g1".parse().unwrap(),
-            say: "Castle kingside.".to_owned(),
         }
     );
 }
