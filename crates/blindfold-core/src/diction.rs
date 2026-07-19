@@ -89,6 +89,24 @@ pub enum Intent {
     Unclear,
 }
 
+/// A whole spoken *line* — a sequence of moves/castles/commands recovered from one
+/// transcript, plus whether it ends mid-move.
+///
+/// A speech recogniser in `continuous` mode hands back a growing transcript that may
+/// hold several moves ("queen f5 queen g6"), so the app streams: it commits each
+/// complete move as the next one begins and previews the one still being spoken. That
+/// is what [`trailing`](LineParse::trailing) marks — the last segment parsed to an
+/// incomplete move (a role or half a coordinate, no destination yet), so the caller
+/// should treat every entry in [`intents`](LineParse::intents) as settled and keep
+/// listening for the rest of the final move.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct LineParse {
+    /// The complete moves, castles, and commands, in spoken order.
+    pub intents: Vec<Intent>,
+    /// The transcript ends with an incomplete move fragment (still being spoken).
+    pub trailing: bool,
+}
+
 /// The outcome of checking a move-shaped [`Intent`] against a concrete position.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Resolution {
@@ -107,39 +125,136 @@ pub enum Resolution {
     Illegal,
 }
 
-/// Turn a raw transcript into an [`Intent`]. Pure string work — no position.
+/// Turn a raw transcript into a single [`Intent`]. Pure string work — no position.
+///
+/// Reads the *whole* transcript as one move (its destination is the last file+rank
+/// spoken, earlier coordinates disambiguate). For a transcript that may hold several
+/// moves in a row, use [`parse_line`].
 pub fn parse(transcript: &str) -> Intent {
-    let words: Vec<Word> = transcript
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .flat_map(split_letters_from_digits)
-        .map(|w| classify(&w))
-        .collect();
+    let words = classify_all(transcript);
 
     // A castle is its own grammar: "castle", "castles kingside", "long castle". The
     // side words are checked *before* the move path so "king side" cannot be misread as
     // a king move.
     if words.iter().any(|w| matches!(w, Word::Castle)) {
-        let side = words.iter().find_map(|w| match w {
-            Word::Side(side) => Some(*side),
-            _ => None,
-        });
+        let side = words.iter().find_map(Word::side);
         return Intent::Castle(side);
     }
 
-    // The destination is the last file and the last rank spoken; earlier ones
-    // disambiguate. Roles are split by whether they come before the destination (the
-    // mover) or after it (a promotion), which is what tells "queen e8" (a queen moves)
-    // from "e8 queen" (a pawn promotes).
+    if let Some(spoken) = move_from_words(&words) {
+        return Intent::Move(spoken);
+    }
+
+    // No destination, so this is not a move. A command word alone stands here.
+    match words.iter().find_map(Word::command) {
+        Some(command) => Intent::Command(command),
+        None => Intent::Unclear,
+    }
+}
+
+/// Segment a transcript into the sequence of moves/castles/commands it holds, for the
+/// streaming multi-move path — see [`LineParse`]. Pure string work; no position.
+///
+/// A new move begins at a role that has a coordinate after it (so "queen f5 **queen**
+/// g6" is two moves, while "e8 **queen**" is one pawn move promoting), or at a command
+/// or castle word. Coordinates otherwise stick to the current move, which is what keeps
+/// a spoken disambiguator together with its move ("rook a1 a8" stays one move). The one
+/// shape it cannot split is a piece move followed by a *bare* pawn move ("queen g6 e4"
+/// reads as one disambiguated move) — say "pawn" to separate them.
+pub fn parse_line(transcript: &str) -> LineParse {
+    let words = classify_all(transcript);
+    let mut intents = Vec::new();
+    // Whether the final segment parsed to an incomplete move (no destination yet).
+    let mut trailing = false;
+    let mut i = 0;
+    while i < words.len() {
+        match words[i] {
+            Word::Command(command) => {
+                intents.push(Intent::Command(command));
+                trailing = false;
+                i += 1;
+            }
+            Word::Castle => {
+                let end = segment_end(&words, i);
+                let side = words[i..end].iter().find_map(Word::side);
+                intents.push(Intent::Castle(side));
+                trailing = false;
+                i = end;
+            }
+            // A stray side word or filler with no move around it: skip it.
+            Word::Side(_) | Word::Noise => {
+                trailing = false;
+                i += 1;
+            }
+            // A move: from here to the next segment start is one move's worth of words.
+            Word::Role(_) | Word::File(_) | Word::Rank(_) => {
+                let end = segment_end(&words, i);
+                match move_from_words(&words[i..end]) {
+                    Some(spoken) => {
+                        intents.push(Intent::Move(spoken));
+                        trailing = false;
+                    }
+                    // No destination in this run — an incomplete move still being spoken.
+                    None => trailing = true,
+                }
+                i = end;
+            }
+        }
+    }
+    LineParse { intents, trailing }
+}
+
+/// Where the segment beginning at `from` ends: the index of the next word that starts a
+/// new segment — a command, a castle, or a role that begins a new move.
+///
+/// The subtle case is distinguishing a *mover* role (which starts a new move) from a
+/// *promotion* role (which stays with the current move). A mover has its own destination:
+/// a coordinate follows it before any other role. A promotion is spoken *after* its move's
+/// destination, so the next thing after it is either another role or the end, never its own
+/// coordinate. Hence a role starts a new segment iff a coordinate follows it *before* the
+/// next role — this is what keeps "g1 queen queen g3" (promote on g1, then queen to g3) from
+/// being read as "g1, queen to g3" with the promotion lost.
+fn segment_end(words: &[Word], from: usize) -> usize {
+    (from + 1..words.len())
+        .find(|&j| match words[j] {
+            Word::Command(_) | Word::Castle => true,
+            Word::Role(_) => {
+                let rest = &words[j + 1..];
+                let coord = |w: &Word| w.file().is_some() || w.rank().is_some();
+                let next_coord = rest.iter().position(coord);
+                let next_role = rest.iter().position(|w| matches!(w, Word::Role(_)));
+                match (next_coord, next_role) {
+                    (Some(c), Some(r)) => c < r,
+                    (Some(_), None) => true,
+                    (None, _) => false,
+                }
+            }
+            _ => false,
+        })
+        .unwrap_or(words.len())
+}
+
+/// Tokenise a transcript into classified [`Word`]s: split on non-alphanumerics, break
+/// glued coordinates like `"f6"` into `["f", "6"]`, and classify each.
+fn classify_all(transcript: &str) -> Vec<Word> {
+    transcript
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .flat_map(split_letters_from_digits)
+        .map(|w| classify(&w))
+        .collect()
+}
+
+/// Build a [`Move`] from one move's worth of classified words, or `None` if there is no
+/// destination (no file *and* rank) — an incomplete fragment.
+///
+/// The destination is the last file and last rank spoken; earlier ones disambiguate.
+/// Roles are split by whether they come before the destination (the mover) or after it
+/// (a promotion), which is what tells "queen e8" (a queen moves) from "e8 queen" (a pawn
+/// promotes).
+fn move_from_words(words: &[Word]) -> Option<Move> {
     let files: Vec<shakmaty::File> = words.iter().filter_map(Word::file).collect();
     let ranks: Vec<shakmaty::Rank> = words.iter().filter_map(Word::rank).collect();
-
-    let (Some(&to_file), Some(&to_rank)) = (files.last(), ranks.last()) else {
-        // No destination, so this is not a move. A command word alone stands here.
-        return match words.iter().find_map(Word::command) {
-            Some(command) => Intent::Command(command),
-            None => Intent::Unclear,
-        };
-    };
+    let (&to_file, &to_rank) = (files.last()?, ranks.last()?);
 
     let last_coord = words
         .iter()
@@ -156,7 +271,7 @@ pub fn parse(transcript: &str) -> Intent {
         .find_map(Word::role)
         .filter(|r| constants::PROMOTABLE.contains(r));
 
-    Intent::Move(Move {
+    Some(Move {
         role,
         // The disambiguators are the file and rank *before* the destination's.
         from_file: nth_from_last(&files, 1),
@@ -293,6 +408,13 @@ impl Word {
     fn command(&self) -> Option<Command> {
         match self {
             Word::Command(c) => Some(*c),
+            _ => None,
+        }
+    }
+
+    fn side(&self) -> Option<shakmaty::CastlingSide> {
+        match self {
+            Word::Side(s) => Some(*s),
             _ => None,
         }
     }

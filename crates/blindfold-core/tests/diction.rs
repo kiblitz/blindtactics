@@ -252,6 +252,111 @@ fn castles_parse_with_and_without_a_side() {
     assert_eq!(parse("long castle"), queenside);
 }
 
+// --- parsing a whole line (streaming multi-move) -----------------------------
+
+fn line(s: &str) -> diction::LineParse {
+    diction::parse_line(s)
+}
+
+fn parsed(intents: Vec<diction::Intent>, trailing: bool) -> diction::LineParse {
+    diction::LineParse { intents, trailing }
+}
+
+#[test]
+fn a_single_move_is_a_one_element_line() {
+    assert_eq!(line("knight f6"), parsed(vec![parse("knight f6")], false));
+}
+
+#[test]
+fn several_moves_in_one_breath_each_become_a_move() {
+    // The whole point: "queen f5 queen g6" is two moves, split at the second role because
+    // it has a coordinate after it (a new mover, not a promotion).
+    assert_eq!(
+        line("queen f5 queen g6"),
+        parsed(vec![parse("queen f5"), parse("queen g6")], false)
+    );
+    // The originally-reported case: two knight moves said back to back.
+    assert_eq!(
+        line("knight f7 knight f6"),
+        parsed(vec![parse("knight f7"), parse("knight f6")], false)
+    );
+}
+
+#[test]
+fn an_incomplete_trailing_move_is_flagged_not_dropped() {
+    // "knight f7 knight f" — the first move is complete and settled; the second is still
+    // being spoken (a role and a file, no rank), so it is not an intent yet but `trailing`
+    // says to keep listening.
+    assert_eq!(
+        line("knight f7 knight f"),
+        parsed(vec![parse("knight f7")], true)
+    );
+}
+
+#[test]
+fn a_command_after_moves_is_its_own_segment() {
+    // "queen f5 submit" streams the move, then the command — spoken hands-free in one go.
+    assert_eq!(
+        line("queen f5 submit"),
+        parsed(
+            vec![
+                parse("queen f5"),
+                diction::Intent::Command(diction::Command::Submit)
+            ],
+            false
+        )
+    );
+}
+
+#[test]
+fn a_promotion_stays_one_move_in_a_line() {
+    // "e8 queen" is a pawn promoting, not a pawn move then a stray "queen": the trailing
+    // role has no coordinate after it, so it is a promotion and stays in the move.
+    assert_eq!(line("e8 queen"), parsed(vec![parse("e8 queen")], false));
+}
+
+#[test]
+fn a_promotion_mid_line_is_not_read_as_the_next_mover() {
+    // "pawn g2 pawn g1 queen queen g3" — a pawn promotes on g1, then the new queen moves to
+    // g3. The first "queen" is the promotion (no coordinate of its own before the next role);
+    // the second "queen" is the mover of the next move. Read greedily, the first queen would
+    // be taken as a mover to g3 and the promotion lost.
+    assert_eq!(
+        line("pawn g2 pawn g1 queen queen g3"),
+        parsed(
+            vec![parse("pawn g2"), parse("pawn g1 queen"), parse("queen g3")],
+            false
+        )
+    );
+}
+
+#[test]
+fn a_castle_in_a_line_is_split_from_the_next_move() {
+    assert_eq!(
+        line("castle kingside queen g6"),
+        parsed(
+            vec![
+                diction::Intent::Castle(Some(shakmaty::CastlingSide::KingSide)),
+                parse("queen g6"),
+            ],
+            false
+        )
+    );
+}
+
+#[test]
+fn a_disambiguated_move_stays_a_single_move_in_a_line() {
+    // "rook g f8" is one move with a from-file, not a move to g-something then f8 —
+    // coordinates stick to the current move unless a new role intervenes.
+    assert_eq!(line("rook g f8"), parsed(vec![parse("rook g f8")], false));
+}
+
+#[test]
+fn nothing_chess_shaped_is_an_empty_line() {
+    assert_eq!(line("hello there"), parsed(vec![], false));
+    assert_eq!(line(""), parsed(vec![], false));
+}
+
 // --- resolving a move against a position -------------------------------------
 
 const ONE_KNIGHT: &str = "4k3/8/8/8/8/5N2/8/4K3 w - - 0 1";
