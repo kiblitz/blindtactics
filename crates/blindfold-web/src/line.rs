@@ -35,6 +35,15 @@ pub fn Line(
     #[prop(into)]
     can_back: Signal<bool>,
     #[prop(into)] can_forward: Signal<bool>,
+    /// Whether this browser can do speech recognition at all. When `false` the record
+    /// control is not rendered — the feature is simply absent rather than a dead button.
+    mic_supported: bool,
+    /// Whether the mic is armed (the record control glows red) and, while it is, the
+    /// live silence countdown shown beside it.
+    #[prop(into)]
+    listening: Signal<bool>,
+    #[prop(into)] countdown: Signal<Option<u32>>,
+    #[prop(into)] on_toggle_mic: Callback<()>,
     #[prop(into)] on_undo: Callback<()>,
     #[prop(into)] on_clear: Callback<()>,
     #[prop(into)] on_submit: Callback<()>,
@@ -176,6 +185,48 @@ pub fn Line(
                     }
                 }}
             </div>
+
+            // The record control — the bottom-area button for spoken input. Outside the
+            // editing/revealed switch so it is available in both (saying "next" after a
+            // solve is as useful as saying a move before one). Only rendered where
+            // recognition exists, so it never appears as a control that cannot work.
+            {mic_supported
+                .then(|| {
+                    view! {
+                        <div class="micbar">
+                            <button
+                                class="button button--record"
+                                class:button--recording=move || listening.get()
+                                aria-pressed=move || listening.get().to_string()
+                                aria-label="Voice input"
+                                title=move || {
+                                    if listening.get() {
+                                        "Listening — tap to stop"
+                                    } else {
+                                        "Speak your moves"
+                                    }
+                                }
+                                on:click=move |_| on_toggle_mic.run(())
+                            >
+                                <span class="micbar__dot"></span>
+                                {move || if listening.get() { "Listening" } else { "Speak" }}
+                            </button>
+                            // The silence countdown: how long until the mic turns itself
+                            // off, so the user is not left guessing how much time is left.
+                            {move || {
+                                countdown
+                                    .get()
+                                    .map(|secs| {
+                                        view! {
+                                            <span class="micbar__countdown mono">
+                                                {format!("{secs}s")}
+                                            </span>
+                                        }
+                                    })
+                            }}
+                        </div>
+                    }
+                })}
 
             <Verdict solve=solve solver=solver />
         </section>

@@ -207,28 +207,6 @@ pub fn save_pov(pov: Pov) {
     storage::write(constants::POV_STORAGE_KEY, pov.token());
 }
 
-/// Whether the puzzle and verdict are read aloud. Off unless the browser has
-/// explicitly stored `on` — audio starts silent and is opt-in, both because it needs
-/// a user gesture to begin and because a page that talks on load is a surprise.
-pub fn load_sound() -> bool {
-    storage::read(constants::SOUND_STORAGE_KEY).as_deref() == Some(SOUND_ON)
-}
-
-/// Persist the read-aloud preference. Silent if `localStorage` is unavailable, like
-/// [`save_pov`].
-pub fn save_sound(on: bool) {
-    storage::write(
-        constants::SOUND_STORAGE_KEY,
-        if on { SOUND_ON } else { SOUND_OFF },
-    );
-}
-
-/// The stored tokens for the read-aloud flag — spelled out rather than
-/// `bool::to_string`, for the same reason [`Pov::token`] is: the on-disk value is a
-/// contract, not an incidental of how a `bool` prints.
-const SOUND_ON: &str = "on";
-const SOUND_OFF: &str = "off";
-
 /// The stored input mode, or [`Input::Physical`] for a browser that has none or an
 /// unrecognised value — the safe default, since it never arms the mic unbidden.
 pub fn load_input() -> Input {

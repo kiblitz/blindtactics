@@ -17,11 +17,29 @@ use leptos::prelude::*;
 
 /// The roster for a position, announced in the order a human would read it out:
 /// the side to move first.
+///
+/// The speak button reads the roster aloud on demand — always present, whatever the
+/// output mode, because that setting governs only *automatic* reading. It sits in the
+/// piece-list panel because that is what it reads; the click is also the user gesture
+/// browsers require before any speech.
 #[component]
-pub fn Roster(#[prop(into)] roster: Signal<roster::Roster>) -> impl IntoView {
+pub fn Roster(
+    #[prop(into)] roster: Signal<roster::Roster>,
+    #[prop(into)] on_speak: Callback<()>,
+) -> impl IntoView {
     view! {
         <section class="panel" aria-label="Piece locations">
-            <h2 class="panel__title">"Roster"</h2>
+            <div class="panel__head">
+                <h2 class="panel__title">"Roster"</h2>
+                <button
+                    class="button button--icon panel__speak"
+                    aria-label="Read the roster aloud"
+                    title="Read the roster aloud"
+                    on:click=move |_| on_speak.run(())
+                >
+                    "🔊"
+                </button>
+            </div>
 
             <p class="panel__tomove">
                 {move || {

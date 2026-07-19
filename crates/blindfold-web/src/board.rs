@@ -76,6 +76,11 @@ pub fn Board(
     /// state lives behind [`crate::session::Attempt`].
     #[prop(into)]
     drawn: Signal<Vec<arrow::Arrow>>,
+    /// A provisional arrow streamed from speech recognition while the user is still
+    /// speaking a move — drawn ghosted, like the in-flight drag, and cleared or
+    /// committed when the phrase settles. `None` when nothing is being spoken.
+    #[prop(into)]
+    preview: Signal<Option<arrow::Arrow>>,
     /// Called with each arrow the user completes by dragging. A last-rank drag is
     /// reported as a plain move like any other; whether it promotes is chosen later
     /// in the line panel, so the board never has to guess.
@@ -192,7 +197,13 @@ pub fn Board(
                     .collect_view()}
             </div>
 
-            <Arrows drawn=drawn dragging=dragging hovering=hovering orientation=orientation />
+            <Arrows
+                drawn=drawn
+                preview=preview
+                dragging=dragging
+                hovering=hovering
+                orientation=orientation
+            />
 
             <div class="board__pieces">
                 {move || {
@@ -241,10 +252,12 @@ fn Coordinates(square: shakmaty::Square, orientation: square::Orientation) -> im
     }
 }
 
-/// The numbered arrows, plus the one being dragged right now.
+/// The numbered arrows, plus the one being dragged right now, plus the provisional
+/// one being spoken.
 #[component]
 fn Arrows(
     #[prop(into)] drawn: Signal<Vec<arrow::Arrow>>,
+    #[prop(into)] preview: Signal<Option<arrow::Arrow>>,
     dragging: Dragging,
     hovering: RwSignal<Option<shakmaty::Square>>,
     orientation: square::Orientation,
@@ -289,6 +302,26 @@ fn Arrows(
                             <Shaft
                                 from=from
                                 to=to
+                                orientation=orientation
+                                number=None
+                                color=constants::GHOST_ARROW_COLOR
+                                offset=0.0
+                            />
+                        }
+                    })
+            }}
+
+            // The move being spoken, streamed in as a ghost until the phrase settles
+            // and it commits (or is dropped). Same ghost styling as the drag, so a
+            // provisional arrow reads as provisional whichever way it is being drawn.
+            {move || {
+                let a = preview.get()?;
+                (a.from != a.to)
+                    .then(|| {
+                        view! {
+                            <Shaft
+                                from=a.from
+                                to=a.to
                                 orientation=orientation
                                 number=None
                                 color=constants::GHOST_ARROW_COLOR

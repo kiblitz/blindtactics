@@ -1,6 +1,7 @@
 //! The root component: holds the state, wires the panels to the board.
 
 use crate::board;
+use crate::constants;
 use crate::database;
 use crate::line;
 use crate::panel;
@@ -30,21 +31,41 @@ pub fn App() -> impl IntoView {
     // layers on top of it lives in the `attempt` below, transient by design.
     let pov = RwSignal::new(settings::load_pov());
 
-    // Whether the puzzle and verdict are read aloud, persisted. Off by default: audio
-    // needs a user gesture to start (the enabling click), and a page that talks on
-    // load would be a surprise. The announcement effects below read this.
-    let sound = RwSignal::new(settings::load_sound());
+    // Voice mode's two halves, each persisted. `input` decides whether the mic arms
+    // (and how it carries across puzzles); `output` decides whether the roster and
+    // verdict are read aloud *automatically*. Both default off/visual: audio needs a
+    // user gesture to start, and a page that talks or listens on load is a surprise.
+    let input_mode = RwSignal::new(settings::load_input());
+    let output = RwSignal::new(settings::load_output());
+    // How long a silence ends spoken input, persisted. Shown as a live countdown on
+    // the record control while the mic listens.
+    let silence_secs = RwSignal::new(settings::load_silence());
     // Start the browser loading its voice list now, so a good voice is chosen from the
     // very first announcement rather than after it (some browsers load voices async).
     speech::warm();
+
+    // Whether the mic is actually running, and the user's *last-set* intent for it.
+    // The two differ because the app pauses the running recogniser for its own speech
+    // (see `speech::say`) without the user turning anything off, and because audio
+    // mode re-arms the mic on a new puzzle from the last intent (see `Input::arms_next`).
+    let listening = RwSignal::new(false);
+    let mic_desired = RwSignal::new(false);
+    // The silence countdown shown on the record control (`None` when not listening),
+    // and the interval driving it. `IntervalHandle` is `Copy`, so a plain signal holds
+    // it; nothing subscribes, it is just somewhere to keep the handle to clear later.
+    let countdown = RwSignal::new(None::<u32>);
+    let interval = RwSignal::new(None::<IntervalHandle>);
+    // The provisional arrow streamed onto the board while the user is still speaking a
+    // move — shown ghosted, replaced by a committed arrow on a final transcript.
+    let preview = RwSignal::new(None::<arrow::Arrow>);
 
     // The whole attempt in one signal, so its reset invariant lives in one place a
     // native test can reach — see `session::Attempt`.
     let attempt = RwSignal::new(session::Attempt::new());
 
     // `Memo`, not `Signal::derive`: each caches its value and clones only the
-    // current puzzle (via `session.with`), not the whole 400-puzzle `Session`, and
-    // only recomputes when the puzzle actually changes.
+    // current puzzle (via `session.with`), not the whole `Session`, and only
+    // recomputes when the puzzle actually changes.
     //
     // The `position` memo dedups on `shakmaty::Chess`, whose `PartialEq` ignores the
     // clocks and a non-capturable ep square (see CLAUDE.md). Safe here: those are
@@ -134,31 +155,39 @@ pub fn App() -> impl IntoView {
 
     let draw = move |arrow: arrow::Arrow| attempt.update(|a| a.draw(arrow));
     let flip = move |()| attempt.update(session::Attempt::flip);
-    // Set and persist together, lifted here rather than in the menu so the settings
-    // component stays markup-and-plumbing — the same lifted-callback shape as `submit`.
-    // Guarded against a no-op re-click of the active POV: `pov` feeds the board's
-    // render directly (not through a diff-suppressing memo like `flipped`), so an
-    // unconditional `set` would rebuild the board and drop an in-progress drag even
-    // when nothing changed.
+
+    // The settings write-and-persist closures, lifted here rather than in the menu so
+    // the settings component stays markup-and-plumbing — the same lifted-callback shape
+    // as `submit`. Each is guarded against a no-op re-click so it does not needlessly
+    // churn state (and, for the POV, rebuild the board mid-drag). **Selecting a mode
+    // deliberately actuates nothing** — no speech starts, no mic arms — it only changes
+    // what happens on the *next* puzzle; that is why none of these touch `listening`.
     let choose_pov = move |chosen: settings::Pov| {
         if pov.get_untracked() != chosen {
             pov.set(chosen);
             settings::save_pov(chosen);
         }
     };
-    // Toggle read-aloud, persist it, and act at once: on enabling, read the current
-    // puzzle (the enabling click is the user gesture browsers require before speech);
-    // on muting, stop any speech mid-sentence rather than letting it finish.
-    let toggle_sound = move |()| {
-        let on = !sound.get_untracked();
-        sound.set(on);
-        settings::save_sound(on);
-        if on {
-            speech::say(&position.with_untracked(|p| roster::of(p).speech()));
-        } else {
-            speech::silence();
+    let choose_input = move |chosen: settings::Input| {
+        if input_mode.get_untracked() != chosen {
+            input_mode.set(chosen);
+            settings::save_input(chosen);
         }
     };
+    let choose_output = move |chosen: settings::Output| {
+        if output.get_untracked() != chosen {
+            output.set(chosen);
+            settings::save_output(chosen);
+        }
+    };
+    let set_silence = move |secs: u32| {
+        let secs = settings::clamp_silence(secs);
+        if silence_secs.get_untracked() != secs {
+            silence_secs.set(secs);
+            settings::save_silence(secs);
+        }
+    };
+
     let undo = move |()| attempt.update(session::Attempt::undo);
     let clear = move |()| attempt.update(session::Attempt::clear);
     let promote = move |(index, role): (usize, Option<shakmaty::Role>)| {
@@ -168,46 +197,133 @@ pub fn App() -> impl IntoView {
     let step_forward = move |()| attempt.update(session::Attempt::step_forward);
     let step_to = move |ply: usize| attempt.update(|a| a.step_to(ply));
 
-    // Voice input. A heard transcript becomes a drawn arrow, an app command, or a
-    // spoken reply — all decided by `session::interpret` (native-tested), against the
-    // line played forward through the stored defenses. Here we only carry the verdict
-    // out, reusing the very same action closures the buttons use so the two paths
-    // cannot diverge. Confirmations and questions are spoken through `speech` directly,
-    // *not* gated on the read-aloud `sound` toggle: voice mode needs its own feedback,
-    // and the mic-enabling tap is the gesture browsers require before any speech.
+    // Read the current puzzle's roster aloud on demand — the roster panel's speak
+    // button. Always available regardless of the output mode: the setting only governs
+    // *automatic* reading, this is the user asking for it (and the click is the gesture
+    // browsers require before speech).
+    let speak_roster = move |()| {
+        speech::say(&position.with_untracked(|p| roster::of(p).speech()));
+    };
+
+    // --- voice input ---------------------------------------------------------
+    //
+    // A heard transcript becomes a drawn arrow, an app command, or a spoken reply —
+    // all decided by `session::interpret` (native-tested), against the line played
+    // forward through the stored defenses. Here we only carry the verdict out, reusing
+    // the very same action closures the buttons use so the two paths cannot diverge.
     let mic_supported = recognition::is_supported();
-    let listening = RwSignal::new(false);
-    let handle_voice = move |transcript: String| {
+
+    // Turn the mic off and tear down the countdown — the mechanical stop. Does *not*
+    // touch `mic_desired`: the record toggle and only the record toggle records the
+    // user's intent, so a silence timeout or a new-puzzle reset does not look like the
+    // user disarming (which in audio mode would stop it re-arming next puzzle).
+    let deafen = move || {
+        recognition::stop();
+        listening.set(false);
+        preview.set(None);
+        countdown.set(None);
+        if let Some(handle) = interval.get_untracked() {
+            handle.clear();
+            interval.set(None);
+        }
+    };
+
+    // (Re)start the silence countdown from the configured seconds. Every heard phrase
+    // calls this, so the timer only elapses after a real silence; on reaching zero it
+    // `deafen`s, so the record control goes neutral on its own.
+    let start_countdown = move || {
+        countdown.set(Some(silence_secs.get_untracked()));
+        if interval.get_untracked().is_some() {
+            return;
+        }
+        let handle = set_interval_with_handle(
+            move || {
+                let remaining = countdown.get_untracked().unwrap_or(0).saturating_sub(1);
+                if remaining == 0 {
+                    deafen();
+                } else {
+                    countdown.set(Some(remaining));
+                }
+            },
+            std::time::Duration::from_millis(constants::SILENCE_TICK_MS),
+        );
+        interval.set(handle.ok());
+    };
+
+    let handle_voice = move |transcript: String, is_final: bool| {
+        // Any speech — even a partial — is activity: restart the silence countdown.
+        start_countdown();
         let heard = puzzle.with_untracked(|p| {
             attempt.with_untracked(|a| session::interpret(&transcript, p, a.arrows()))
         });
         match heard {
+            // Stream the provisional move onto the board while the user is still
+            // speaking (interim), and commit it only when the phrase settles (final).
             session::Heard::Draw { arrow, say } => {
-                attempt.update(|a| a.draw(arrow));
-                speech::say(&say);
-            }
-            session::Heard::Say(text) => speech::say(&text),
-            session::Heard::Command(command) => match command {
-                diction::Command::Submit => submit(()),
-                diction::Command::Undo => undo(()),
-                diction::Command::Clear => clear(()),
-                diction::Command::Next => next(()),
-                diction::Command::GiveUp => give_up(()),
-                diction::Command::Repeat => {
-                    speech::say(&position.with_untracked(|p| roster::of(p).speech()));
+                if is_final {
+                    preview.set(None);
+                    attempt.update(|a| a.draw(arrow));
+                    speech::say(&say);
+                } else {
+                    preview.set(Some(arrow));
                 }
-            },
+            }
+            // Questions, misses, and commands act on the settled phrase only — an
+            // interim "sub…" must not fire submit.
+            session::Heard::Say(text) => {
+                if is_final {
+                    preview.set(None);
+                    speech::say(&text);
+                }
+            }
+            session::Heard::Command(command) => {
+                if !is_final {
+                    return;
+                }
+                preview.set(None);
+                match command {
+                    diction::Command::Submit => submit(()),
+                    diction::Command::Undo => undo(()),
+                    diction::Command::Clear => clear(()),
+                    diction::Command::Next => next(()),
+                    diction::Command::GiveUp => give_up(()),
+                    diction::Command::Repeat => {
+                        speech::say(&position.with_untracked(|p| roster::of(p).speech()));
+                    }
+                }
+            }
         }
     };
-    // Toggle the mic. Enabling reads the roster at once — that tap is the user gesture
-    // browsers demand before any speech, and hearing the puzzle is the hands-free start.
+
+    // Start listening, returning whether it actually started. Drives the silence
+    // countdown; the browser may refuse (no permission / no gesture), in which case the
+    // caller must not leave the control armed.
+    let start_listening = move || {
+        if recognition::start(handle_voice) {
+            listening.set(true);
+            start_countdown();
+            true
+        } else {
+            false
+        }
+    };
+
+    // The record control: arm or disarm the mic, recording the user's intent so audio
+    // mode carries it across puzzles. Arming reads the roster at once — that tap is the
+    // gesture browsers demand before any speech, and hearing the puzzle is the
+    // hands-free start.
     let toggle_mic = move |()| {
         if listening.get_untracked() {
-            recognition::stop();
-            listening.set(false);
-        } else if recognition::start(handle_voice) {
-            listening.set(true);
-            speech::say(&position.with_untracked(|p| roster::of(p).speech()));
+            mic_desired.set(false);
+            deafen();
+        } else {
+            mic_desired.set(true);
+            if start_listening() {
+                speech::say(&position.with_untracked(|p| roster::of(p).speech()));
+            } else {
+                // Refused: do not leave the button armed over a mic that never started.
+                mic_desired.set(false);
+            }
         }
     };
 
@@ -233,26 +349,45 @@ pub fn App() -> impl IntoView {
     });
     on_cleanup(move || keydown.remove());
 
-    // Read the puzzle aloud when a new one is served, if sound is on. Subscribes to
-    // `position` (so it fires on load and on every `next`) but reads `sound`
-    // untracked — toggling sound must not re-read the roster through here; that is the
-    // toggle's own job, which also owns the enabling gesture. On the very first run
-    // with sound persisted-on, the browser may refuse for lack of a gesture; that
-    // degrades to silence until the first interaction, which is acceptable.
+    // Arm or disarm the mic for a *new* puzzle, per the input mode. Subscribes to
+    // `puzzle` only (fires on load and every `next`) and reads the mode and the last
+    // intent untracked, so toggling a mode mid-puzzle actuates nothing — the effect
+    // fires when the puzzle changes, which is when re-arming is wanted. In audio mode a
+    // mic already running just keeps running (no restart, no gap); in draw mode a mic
+    // left on from the previous puzzle is turned off.
+    Effect::new(move |_| {
+        puzzle.track();
+        let want = input_mode
+            .get_untracked()
+            .arms_next(mic_desired.get_untracked());
+        let now = listening.get_untracked();
+        if want && !now {
+            start_listening();
+        } else if !want && now {
+            deafen();
+        }
+    });
+
+    // Read the puzzle aloud when a new one is served, if the output mode speaks.
+    // Subscribes to `position` (so it fires on load and on every `next`) but reads
+    // `output` untracked — switching the mode must not re-read the roster through here
+    // (selecting a setting actuates nothing). On the very first run the browser may
+    // refuse for lack of a gesture; that degrades to silence until the first
+    // interaction, which is acceptable.
     Effect::new(move |_| {
         let spoken = position.with(|p| roster::of(p).speech());
-        if sound.get_untracked() {
+        if output.get_untracked().speaks() {
             speech::say(&spoken);
         }
     });
 
     // Speak the verdict the moment a submission or give-up produces one. Subscribes to
     // `solve` only: it fires when the verdict appears, not when the reveal is stepped
-    // (that changes `ply`, not `solve`) and not when sound is toggled (read untracked,
-    // so enabling sound after solving does not replay the verdict).
+    // (that changes `ply`, not `solve`) and not when the mode is toggled (read
+    // untracked).
     Effect::new(move |_| {
         if let Some(verdict) = solve.get() {
-            if sound.get_untracked() {
+            if output.get_untracked().speaks() {
                 speech::say(&session::spoken(&verdict, solver.get_untracked()));
             }
         }
@@ -296,26 +431,23 @@ pub fn App() -> impl IntoView {
                 </p>
             </header>
 
-            // One header row: the rating and pool size on the left, the board's view
-            // controls (flip, settings) on the right — the toolbar for everything that
-            // is not the board itself. Putting the view controls here rather than in a
-            // bar above the board frees that whole row for the board on a phone.
+            // One header row: the rating on the left, the board's view controls (flip,
+            // settings) on the right — the toolbar for everything that is not the board
+            // itself. Putting the view controls here rather than in a bar above the
+            // board frees that whole row for the board on a phone.
             <div class="topbar">
-                <RatingBar
-                    rating=elo
-                    delta=elo_delta
-                    total=Signal::derive(move || session.with(session::Session::total))
-                />
+                <RatingBar rating=elo delta=elo_delta />
                 <BoardBar
                     pov=pov
                     flipped=flipped
-                    sound=sound
-                    mic_supported=mic_supported
-                    listening=listening
+                    input=input_mode
+                    output=output
+                    silence=silence_secs
                     on_flip=Callback::new(flip)
                     on_choose_pov=Callback::new(choose_pov)
-                    on_toggle_sound=Callback::new(toggle_sound)
-                    on_toggle_mic=Callback::new(toggle_mic)
+                    on_choose_input=Callback::new(choose_input)
+                    on_choose_output=Callback::new(choose_output)
+                    on_set_silence=Callback::new(set_silence)
                 />
             </div>
 
@@ -340,6 +472,7 @@ pub fn App() -> impl IntoView {
                                 <board::Board
                                     orientation=square::Orientation(side)
                                     drawn=drawn
+                                    preview=preview
                                     on_draw=Callback::new(draw)
                                     revealed=revealed
                                     highlight=highlight
@@ -362,7 +495,7 @@ pub fn App() -> impl IntoView {
                         // `.layout__roster` in styles.css), the line stays below.
                         view! {
                             <div class="layout__roster">
-                                <panel::Roster roster=r />
+                                <panel::Roster roster=r on_speak=Callback::new(speak_roster) />
                             </div>
                             <div class="layout__line">
                             <line::Line
@@ -373,6 +506,10 @@ pub fn App() -> impl IntoView {
                                 ply=ply
                                 can_back=can_back
                                 can_forward=can_forward
+                                mic_supported=mic_supported
+                                listening=listening
+                                countdown=countdown
+                                on_toggle_mic=Callback::new(toggle_mic)
                                 on_undo=Callback::new(undo)
                                 on_clear=Callback::new(clear)
                                 on_submit=Callback::new(submit)
@@ -407,10 +544,11 @@ pub fn App() -> impl IntoView {
     }
 }
 
-/// The user's rating, the change from the last scored puzzle, and the pool size.
+/// The user's rating and the change from the last scored puzzle.
 ///
 /// Chess.com-style: the rating with a "+8" / "-6" badge beside it that appears only
-/// after a scored submission and clears on the next puzzle.
+/// after a scored submission and clears on the next puzzle. The pool size used to sit
+/// here too; it was noise — a user does not need a running count of the database.
 #[component]
 fn RatingBar(
     #[prop(into)] rating: Signal<u32>,
@@ -418,7 +556,6 @@ fn RatingBar(
     /// been scored since the current puzzle was served.
     #[prop(into)]
     delta: Signal<Option<i32>>,
-    #[prop(into)] total: Signal<usize>,
 ) -> impl IntoView {
     view! {
         <div class="statusbar">
@@ -442,7 +579,6 @@ fn RatingBar(
                         })
                 }}
             </span>
-            <span class="statusbar__count">{move || format!("{} puzzles", total.get())}</span>
         </div>
     }
 }
@@ -462,63 +598,27 @@ fn Facts(session: RwSignal<session::Session>) -> impl IntoView {
 
 /// The board's view controls: flip, and the settings menu.
 ///
-/// Both change *how* the board is drawn, not what the puzzle is, so they sit in the
-/// header row (`.topbar`) with the rating — the toolbar for everything that is not the
-/// board — rather than in a bar above the board, which on a phone is a row of height
-/// the board would rather have. The flip is a transient per-puzzle toggle (its
-/// `pressed` state tracks the attempt); the settings menu holds the persisted point of
-/// view.
+/// Both change *how* the board is drawn or delivered, not what the puzzle is, so they
+/// sit in the header row (`.topbar`) with the rating — the toolbar for everything that
+/// is not the board — rather than in a bar above the board, which on a phone is a row
+/// of height the board would rather have. The flip is a transient per-puzzle toggle
+/// (its `pressed` state tracks the attempt); the settings menu holds the persisted
+/// preferences (point of view, and voice mode's input/output modes and silence timeout).
 #[component]
 fn BoardBar(
     #[prop(into)] pov: Signal<settings::Pov>,
     #[prop(into)] flipped: Signal<bool>,
-    #[prop(into)] sound: Signal<bool>,
-    /// Whether this browser can do speech recognition at all. When `false` the mic
-    /// control is not rendered — the feature is simply absent rather than a dead button.
-    mic_supported: bool,
-    #[prop(into)] listening: Signal<bool>,
+    #[prop(into)] input: Signal<settings::Input>,
+    #[prop(into)] output: Signal<settings::Output>,
+    #[prop(into)] silence: Signal<u32>,
     #[prop(into)] on_flip: Callback<()>,
     #[prop(into)] on_choose_pov: Callback<settings::Pov>,
-    #[prop(into)] on_toggle_sound: Callback<()>,
-    #[prop(into)] on_toggle_mic: Callback<()>,
+    #[prop(into)] on_choose_input: Callback<settings::Input>,
+    #[prop(into)] on_choose_output: Callback<settings::Output>,
+    #[prop(into)] on_set_silence: Callback<u32>,
 ) -> impl IntoView {
     view! {
         <div class="boardbar">
-            // Voice input: the mic, first, because speaking the solution is the point of
-            // the project. Only shown where recognition exists (Chrome/Edge/Android/iOS
-            // Safari), so it never appears as a control that cannot work.
-            {mic_supported
-                .then(|| {
-                    view! {
-                        <button
-                            class="button button--icon"
-                            class:button--on=move || listening.get()
-                            aria-pressed=move || listening.get().to_string()
-                            aria-label="Voice input"
-                            title=move || {
-                                if listening.get() {
-                                    "Listening — tap to stop"
-                                } else {
-                                    "Speak your moves"
-                                }
-                            }
-                            on:click=move |_| on_toggle_mic.run(())
-                        >
-                            {move || if listening.get() { "🎙️" } else { "🎤" }}
-                        </button>
-                    }
-                })}
-            // Read-aloud toggle: one tap to have the puzzle (and the verdict) spoken.
-            <button
-                class="button button--icon"
-                class:button--on=move || sound.get()
-                aria-pressed=move || sound.get().to_string()
-                aria-label="Read aloud"
-                title=move || if sound.get() { "Reading aloud — tap to mute" } else { "Read the puzzle aloud" }
-                on:click=move |_| on_toggle_sound.run(())
-            >
-                {move || if sound.get() { "🔊" } else { "🔈" }}
-            </button>
             <button
                 class="button button--icon"
                 class:button--on=move || flipped.get()
@@ -529,23 +629,104 @@ fn BoardBar(
             >
                 "⇅"
             </button>
-            <Settings pov=pov on_choose=on_choose_pov />
+            <Settings
+                pov=pov
+                input=input
+                output=output
+                silence=silence
+                on_choose_pov=on_choose_pov
+                on_choose_input=on_choose_input
+                on_choose_output=on_choose_output
+                on_set_silence=on_set_silence
+            />
         </div>
+    }
+}
+
+/// A labelled radio group inside the settings menu: a heading and one button per
+/// option, the current one pressed. Factored out because the three mode groups (point
+/// of view, input, output) render identically — a heading, options off `ALL`, one
+/// checked — differing only in their labels and which index a click picks. `on_pick`
+/// takes the option's index into its `ALL`, which the caller maps back to the enum.
+fn radio_group(
+    heading: &'static str,
+    options: Vec<(&'static str, Signal<bool>)>,
+    on_pick: Callback<usize>,
+) -> impl IntoView {
+    view! {
+        <p class="settings__heading">{heading}</p>
+        {options
+            .into_iter()
+            .enumerate()
+            .map(|(i, (label, on))| {
+                view! {
+                    <button
+                        class="settings__option"
+                        class:settings__option--on=move || on.get()
+                        role="menuitemradio"
+                        aria-checked=move || on.get().to_string()
+                        on:click=move |_| on_pick.run(i)
+                    >
+                        {label}
+                    </button>
+                }
+            })
+            .collect_view()}
     }
 }
 
 /// The settings menu: a gear that opens a small panel of preferences.
 ///
-/// One setting for now — the point of view — but it is its own component and backed
-/// by its own [`settings`] module because it is the seam more settings hang off, not
-/// a lone control. Toggled open by the gear; the board updates live behind it as the
-/// choice changes, so there is nothing to confirm and no need to close on select.
+/// Point of view, and voice mode's two modes plus the silence timeout. Toggled open by
+/// the gear; the board and modes update live behind it as choices change, so there is
+/// nothing to confirm and no need to close on select.
 #[component]
 fn Settings(
     #[prop(into)] pov: Signal<settings::Pov>,
-    #[prop(into)] on_choose: Callback<settings::Pov>,
+    #[prop(into)] input: Signal<settings::Input>,
+    #[prop(into)] output: Signal<settings::Output>,
+    #[prop(into)] silence: Signal<u32>,
+    #[prop(into)] on_choose_pov: Callback<settings::Pov>,
+    #[prop(into)] on_choose_input: Callback<settings::Input>,
+    #[prop(into)] on_choose_output: Callback<settings::Output>,
+    #[prop(into)] on_set_silence: Callback<u32>,
 ) -> impl IntoView {
     let open = RwSignal::new(false);
+
+    // Each mode group's options as (label, is-current), read off its `ALL` so the menu
+    // cannot drift from the enum. The `on_pick` callbacks map an index back to `ALL`.
+    let pov_options = move || {
+        settings::Pov::ALL
+            .into_iter()
+            .map(|option| (option.label(), Signal::derive(move || pov.get() == option)))
+            .collect::<Vec<_>>()
+    };
+    let input_options = move || {
+        settings::Input::ALL
+            .into_iter()
+            .map(|option| {
+                (
+                    option.label(),
+                    Signal::derive(move || input.get() == option),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let output_options = move || {
+        settings::Output::ALL
+            .into_iter()
+            .map(|option| {
+                (
+                    option.label(),
+                    Signal::derive(move || output.get() == option),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let pick_pov = Callback::new(move |i: usize| on_choose_pov.run(settings::Pov::ALL[i]));
+    let pick_input = Callback::new(move |i: usize| on_choose_input.run(settings::Input::ALL[i]));
+    let pick_output = Callback::new(move |i: usize| on_choose_output.run(settings::Output::ALL[i]));
+
     view! {
         <div class="settings">
             <button
@@ -563,24 +744,39 @@ fn Settings(
                     .then(|| {
                         view! {
                             <div class="settings__menu" role="menu" aria-label="Settings">
-                                <p class="settings__heading">"Point of view"</p>
-                                {settings::Pov::ALL
-                                    .into_iter()
-                                    .map(|option| {
-                                        let on = Signal::derive(move || pov.get() == option);
-                                        view! {
-                                            <button
-                                                class="settings__option"
-                                                class:settings__option--on=move || on.get()
-                                                role="menuitemradio"
-                                                aria-checked=move || on.get().to_string()
-                                                on:click=move |_| on_choose.run(option)
-                                            >
-                                                {option.label()}
-                                            </button>
+                                {radio_group("Point of view", pov_options(), pick_pov)}
+                                {radio_group("Input", input_options(), pick_input)}
+                                {radio_group("Output", output_options(), pick_output)}
+                                <p class="settings__heading">"Silence timeout"</p>
+                                <div class="settings__stepper">
+                                    <button
+                                        class="button button--icon"
+                                        aria-label="Shorter silence timeout"
+                                        on:click=move |_| {
+                                            on_set_silence
+                                                .run(
+                                                    silence
+                                                        .get()
+                                                        .saturating_sub(constants::SILENCE_STEP_SECS),
+                                                )
                                         }
-                                    })
-                                    .collect_view()}
+                                    >
+                                        "−"
+                                    </button>
+                                    <span class="settings__stepper-value mono">
+                                        {move || format!("{}s", silence.get())}
+                                    </span>
+                                    <button
+                                        class="button button--icon"
+                                        aria-label="Longer silence timeout"
+                                        on:click=move |_| {
+                                            on_set_silence
+                                                .run(silence.get() + constants::SILENCE_STEP_SECS)
+                                        }
+                                    >
+                                        "+"
+                                    </button>
+                                </div>
                             </div>
                         }
                     })

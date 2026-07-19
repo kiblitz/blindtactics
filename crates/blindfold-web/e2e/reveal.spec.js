@@ -367,39 +367,41 @@ test("the POV setting and flip control re-orient the board", async ({ page }) =>
   expect(errors).toEqual([]);
 });
 
-// The read-aloud toggle drives the browser's speechSynthesis, which a native test
-// cannot reach — so this guards the wiring: the toggle flips, persists across a
-// reload like the POV, and speaking raises no page error. Headless chromium has a
-// speechSynthesis with no voices, so `speak()` is a silent no-op here; what matters is
-// that toggling and speaking never throw.
-test("the read-aloud toggle persists and speaking raises no error", async ({ page }) => {
+// Output mode and read-aloud drive the browser's speechSynthesis, which a native test
+// cannot reach — so this guards the wiring: the output mode persists across a reload
+// like the POV, selecting it actuates nothing, and the roster's speak button reads
+// aloud without a page error. Headless chromium has a speechSynthesis with no voices,
+// so `speak()` is a silent no-op here; what matters is nothing throws.
+test("the output mode persists and the roster speak button raises no error", async ({ page }) => {
   const errors = collectErrors(page);
 
   await page.goto("/");
   await expect(page.locator(".board")).toBeVisible();
-  const aloud = page.getByRole("button", { name: "Read aloud" });
 
-  // Off by default — audio is opt-in.
-  await expect(aloud).toHaveAttribute("aria-pressed", "false");
+  // The roster's speak button reads the puzzle aloud on demand (the click is the
+  // required gesture). Checked first, while the settings menu is closed and not
+  // floating over it. A silent no-op in headless, but it must never throw.
+  await page.getByRole("button", { name: "Read the roster aloud" }).click();
 
-  // Enabling reads the current puzzle aloud (the click is the required gesture) and
-  // flips the control on.
-  await aloud.click();
-  await expect(aloud).toHaveAttribute("aria-pressed", "true");
+  // Output defaults to "Show" — nothing is spoken automatically (audio is opt-in).
+  await page.getByRole("button", { name: "Settings" }).click();
+  const readAloud = page.getByRole("menuitemradio", { name: "Read aloud" });
+  await expect(readAloud).toHaveAttribute("aria-checked", "false");
 
-  // The preference persists across a reload, like the POV.
+  // Selecting "Read aloud" marks the mode and persists it, but — deliberately —
+  // actuates nothing (no speech on select; selecting a setting is not a gesture to
+  // start talking). We only assert the mode took; that it speaks on the *next* puzzle
+  // is a timing-dependent effect not worth pinning in a browser test.
+  await readAloud.click();
+  await expect(readAloud).toHaveAttribute("aria-checked", "true");
+
+  // Persists across a reload, like the POV.
   await page.reload();
   await expect(page.locator(".board")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Read aloud" })).toHaveAttribute(
-    "aria-pressed",
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByRole("menuitemradio", { name: "Read aloud" })).toHaveAttribute(
+    "aria-checked",
     "true"
-  );
-
-  // Muting flips it back off and stops any speech, again without error.
-  await page.getByRole("button", { name: "Read aloud" }).click();
-  await expect(page.getByRole("button", { name: "Read aloud" })).toHaveAttribute(
-    "aria-pressed",
-    "false"
   );
 
   expect(errors).toEqual([]);
