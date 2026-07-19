@@ -251,6 +251,10 @@ offline curation tool and the live app (so the DB and the app cannot disagree ab
 - `mate` — `judge` (does this line mate against every defense?), `playback` (the plies the
   UI steps through on a solve), and `find_linear` / `min_depth` (search). The heart of the
   project.
+- `diction` — spoken input: `parse` (transcript → `Intent`, pure string work) and `resolve`
+  (intent + position → arrow / a question / illegal). The input half of voice mode; see
+  "Voice input" below. The most bug-prone part of the project, so it is pure core and
+  tested the hardest.
 - `roster` — piece locations as **structured data** (`roster::Entry { role, squares }`),
   ordered K/Q/R/B/N/P, **plus castling rights and the en-passant square**. Renders to text
   (`text`, `name`, `color_name`, `heading`) and later to speech, never a string; the *SVG*
@@ -672,24 +676,54 @@ default. Guarded by `reveal.spec.js`'s read-aloud test (toggle flips, persists a
 reload, speaking raises no page error — headless chromium's `speechSynthesis` has no voices
 so `speak()` is a silent no-op, which is exactly enough to prove the wiring never throws).
 
-**Voice input (next phase, not built).** Speech recognition (`webkitSpeechRecognition`) →
-spoken move → arrow. The hard, bug-prone half, so it is planned to land as a pure, heavily
-tested core module (`diction`): `parse` (transcript → fuzzy-SAN intent or a command like
-"submit"/"undo"/"next"/"repeat") and `resolve` (intent + position → one arrow, or
-ambiguous-needs-which, or illegal). Constraints already known and worth not re-deriving:
+**Voice input — the core parser is built (`diction`); the browser wiring is next.**
+Speech recognition (`webkitSpeechRecognition`) → spoken move → arrow. The hard, bug-prone
+half, so its brain lives in a pure, heavily tested core module and the browser only feeds
+it strings.
 
-- `webkitSpeechRecognition` is **Chrome / Edge / Android Chrome / iOS Safari 14.5+**, *not*
-  Firefox; it needs **mic permission**, needs **internet** (Chrome streams audio to
-  Google), and needs a **gesture to start**. So "never touch the device" is one tap to
-  begin a session, then hands-free.
-- SAN resolves against a *position*, and move *k*'s position depends on which defense the
-  opponent chose — which is not fixed in a linear puzzle. Plan: resolve each spoken move
-  against the line played forward using the **stored solution's replies** as context
-  (correct for the normal single-mate case), producing a concrete arrow, then let the
-  existing `judge` verify the arrows against *all* defenses exactly as it does for drawn
-  ones. A dual that diverges from the stored line falls back to asking for the full
-  from-square. The grammar rules from "Decisions" above (extra info never penalised;
-  missing info asked about, never auto-resolved and never rejected) live in `resolve`.
+`crates/blindfold-core/src/diction.rs` — two stages, split on purpose:
+
+- `parse(transcript) -> Intent` is **pure string work, no position**. `Intent` is a
+  `Move` (spoken algebraic notation), a `Castle(Option<side>)`, a `Command`
+  (`Submit`/`Undo`/`Clear`/`Next`/`Repeat`/`GiveUp`), or `Unclear`. It is *fuzzy* because a
+  recogniser is tuned for prose: "knight"→"night", "rook"→"rock", coordinates arrive glued
+  ("f6"), spaced ("f 6") or spelled ("eff six"). So it maps generously against homophone
+  tables (`role_word`/`file_word`/`rank_word`/`command_word`) and recovers *structure*, not
+  spelling: **the destination is the last file-and-rank spoken, an earlier file/rank
+  disambiguates, a role before the destination is the mover and a role after it is a
+  promotion** (so "queen e8" is a queen moving, "e8 queen" is a pawn promoting). Number
+  homophones that are also prepositions ("to"/"too"/"for") are deliberately *not* mapped to
+  ranks, or "rook to f8" would read "to" as rank 2.
+- `resolve(intent, pos) -> Option<Resolution>` checks a move/castle against a concrete
+  position: `Move(arrow)` when exactly one legal move fits, or a question —
+  `Ambiguous(from_squares)`, `NeedsPromotion(dest)`, `NeedsCastleSide` — or `Illegal`.
+  `None` for a command/unclear. This is where the two grammar rules live: **extra info
+  never penalised** (a full from-square filters to the one move; a stray promotion on a
+  non-promoting move is dropped, not made illegal; "takes"/"check"/"mate" are noise) and
+  **missing info asked about, never auto-resolved** (two knights to f6 → `Ambiguous`, never
+  a guess). Castles resolve through `Arrow::of_move`, so a spoken castle produces the same
+  `e1g1` king-travel arrow a drag would.
+
+Pinned by `tests/diction.rs` (26 cases): every command word, homophones, the
+disambiguation structure, promotion-before-vs-after, extra-info acceptance, and each
+`Resolution` arm against hand-built positions. **This is the file to extend first when a
+spoken phrase is misheard** — reproduce it as a `parse`/`resolve` test, then widen a
+homophone table or the structure rule.
+
+Still to build (the browser half):
+
+- A `blindfold-web` `recognition` module wrapping `webkitSpeechRecognition` — thin, like
+  `speech`. It is **Chrome / Edge / Android Chrome / iOS Safari 14.5+**, *not* Firefox;
+  needs **mic permission**, needs **internet** (Chrome streams audio to Google), and needs
+  a **gesture to start**. So "never touch the device" is one tap to begin, then hands-free.
+- App wiring: feed each transcript to `parse`; a `Command` drives the existing
+  submit/undo/clear/next/give-up/announce actions; a move/castle is `resolve`d and either
+  drawn as an arrow, or spoken back as the question (`"which knight — d5 or f5?"`). SAN
+  resolves against a *position*, and move *k*'s position depends on the defense — so the
+  app resolves each spoken move against the line played forward using the **stored
+  solution's replies** as context (correct for the normal single-mate case), then the
+  existing `judge` verifies the assembled arrows against *all* defenses exactly as for
+  drawn ones.
 
 ### Arrows are coloured per move, and duplicates fan apart
 
