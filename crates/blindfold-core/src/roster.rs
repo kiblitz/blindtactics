@@ -1,14 +1,14 @@
 //! Where the pieces are — the only thing the blindfold user is told.
 //!
 //! Modelled as structured data rather than a display string, deliberately. The
-//! same roster has to render three ways: as SVG piece icons beside coordinates,
-//! as plain text, and (later) as speech — "white to play. white: king d5, bishops
-//! b4 c6, pawns a6 b7 g5. black: king g7." Building a string here would force the
-//! audio mode to parse it back apart.
+//! same roster has to render three ways: as SVG piece icons beside coordinates, as
+//! plain text ([`Roster::text`], "white to play. white: king d5…"), and as speech
+//! ([`Roster::speech`], the same but with squares spelled for a voice — "king dee
+//! five"). Building a string here would force the other renderings to parse it apart.
 //!
-//! Text rendering lives here rather than in the UI crate because two consumers
-//! share it (plain text and speech). SVG rendering belongs to the web crate,
-//! which is its only consumer.
+//! Text and speech rendering live here rather than in the UI crate because they are
+//! shared (plain text feeds display and screen readers; speech feeds the read-aloud
+//! mode). SVG rendering belongs to the web crate, which is its only consumer.
 //!
 //! **The roster must carry everything that decides the answer, not just placement.**
 //! Chess has two pieces of state that are not "where the pieces are" — castling
@@ -134,21 +134,44 @@ impl Roster {
         }
     }
 
-    /// Render for reading aloud or displaying as plain text.
+    /// Render as plain text — for display and for a screen reader.
     ///
     /// `"white to play. white: king d5, bishops b4 c6, pawns a6 b7 g5. black: king g7."`
+    ///
+    /// Plain coordinates (`a2`), because that is what the eye reads and what a screen
+    /// reader spells for itself. Our *own* text-to-speech wants [`speech`](Roster::speech)
+    /// instead — see the note there.
     ///
     /// En passant is announced last, as its own sentence, because it is a property
     /// of the position rather than of either side's material — and because a
     /// blindfold user needs it to land after they have both sides' pawns in mind.
     pub fn text(&self) -> String {
+        self.render(square_plain)
+    }
+
+    /// The same announcement rendered for text-to-speech: each square spelled so a
+    /// speech engine reads the file as its letter *name*, not as a word.
+    ///
+    /// Separate from [`text`](Roster::text) deliberately. Handing "a2" to the
+    /// browser's `speechSynthesis` gets the lone file letter read as the article "a" —
+    /// "ah two" rather than "ay two". This spells it out (`"ay two"`) so the file is
+    /// spoken as a letter. It is *not* right for a screen reader, which spells
+    /// coordinates correctly on its own and would read "ay two" as gibberish, which is
+    /// why the two renderings stay distinct. See [`square_spoken`].
+    pub fn speech(&self) -> String {
+        self.render(square_spoken)
+    }
+
+    /// Shared by [`text`](Roster::text) and [`speech`](Roster::speech): identical
+    /// wording and structure, differing only in how a square is spelled.
+    fn render(&self, square: fn(shakmaty::Square) -> String) -> String {
         let mut out = format!("{} to play.", color_name(self.to_move));
         for side in self.sides_in_announce_order() {
             out.push(' ');
-            out.push_str(&side.text());
+            out.push_str(&side.render(square));
         }
-        if let Some(square) = self.en_passant {
-            out.push_str(&format!(" en passant on {square}."));
+        if let Some(sq) = self.en_passant {
+            out.push_str(&format!(" en passant on {}.", square(sq)));
         }
         out
     }
@@ -157,7 +180,11 @@ impl Roster {
 impl Side {
     /// `"white: king e1, queen f4, rooks a1 c2, may castle queenside."`
     pub fn text(&self) -> String {
-        let mut listed: Vec<String> = self.entries.iter().map(Entry::text).collect();
+        self.render(square_plain)
+    }
+
+    fn render(&self, square: fn(shakmaty::Square) -> String) -> String {
+        let mut listed: Vec<String> = self.entries.iter().map(|e| e.render(square)).collect();
         if let Some(castling) = self.castling.text() {
             listed.push(castling.to_owned());
         }
@@ -181,7 +208,11 @@ impl Castling {
 impl Entry {
     /// `"pawns a6 b7 g5"`, or `"king d5"` for a lone piece.
     pub fn text(&self) -> String {
-        let squares: Vec<String> = self.squares.iter().map(|s| s.to_string()).collect();
+        self.render(square_plain)
+    }
+
+    fn render(&self, square: fn(shakmaty::Square) -> String) -> String {
+        let squares: Vec<String> = self.squares.iter().map(|s| square(*s)).collect();
         format!("{} {}", self.name(), squares.join(" "))
     }
 
@@ -191,6 +222,44 @@ impl Entry {
     /// so it never reaches the plural arm.
     pub fn name(&self) -> &'static str {
         name(self.role, self.squares.len() > 1)
+    }
+}
+
+/// A square as plain coordinates — `a2`. What the eye and a screen reader want.
+fn square_plain(square: shakmaty::Square) -> String {
+    square.to_string()
+}
+
+/// A square spelled for text-to-speech: the file as its spoken letter *name*, the
+/// rank as its digit — `b7` → `"bee seven"`, `a2` → `"ay two"`.
+///
+/// Why not just "a2": a speech engine reads the lone file letter as a *word*, so "a2"
+/// comes out "ah two" (the article "a"), and other files fare no better. Spelling the
+/// file as its name forces the letter. The rank digit is left as a digit — "7" is read
+/// "seven" reliably, unlike the file letters. Read off the square's own `Display`
+/// (`"a1"`), so the file/rank split cannot disagree with how a square prints.
+pub fn square_spoken(square: shakmaty::Square) -> String {
+    let coordinates = square.to_string();
+    let mut chars = coordinates.chars();
+    let file = chars
+        .next()
+        .expect("a square's coordinates lead with a file letter");
+    let rank: String = chars.collect();
+    format!("{} {}", file_spoken(file), rank)
+}
+
+/// The spoken name of a file letter — the letter as a speech engine will read it.
+fn file_spoken(file: char) -> &'static str {
+    match file {
+        'a' => "ay",
+        'b' => "bee",
+        'c' => "see",
+        'd' => "dee",
+        'e' => "ee",
+        'f' => "eff",
+        'g' => "gee",
+        'h' => "aitch",
+        _ => unreachable!("a board file is one of a-h"),
     }
 }
 

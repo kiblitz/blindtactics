@@ -80,6 +80,52 @@ fn reads_a_position() {
     );
 }
 
+// --- speech (the text-to-speech rendering) -----------------------------------
+
+/// The read-aloud rendering spells each file as its letter *name*, so a speech engine
+/// says "gee one", not the "ah two" a bare "a2" produces — the whole reason `speech`
+/// is separate from `text`. Same wording and order; only the squares change.
+#[test]
+fn speech_spells_files_as_letter_names() {
+    let r = roster::of(&common::pos(common::BACK_RANK));
+    assert_eq!(
+        r.speech(),
+        "white to play. white: king gee 1, rook ay 1. \
+         black: king gee 8, pawns eff 7 gee 7 aitch 7."
+    );
+}
+
+/// Every file has a multi-letter spelling, so no square is ever handed to the engine
+/// as a lone letter — the exact failure ("a2" → "ah two") this rendering fixes. The
+/// rank stays a digit, which a speech engine reads correctly on its own.
+#[test]
+fn every_file_is_spelled_out() {
+    for (square, spoken) in [
+        (shakmaty::Square::A1, "ay 1"),
+        (shakmaty::Square::B2, "bee 2"),
+        (shakmaty::Square::C3, "see 3"),
+        (shakmaty::Square::D4, "dee 4"),
+        (shakmaty::Square::E5, "ee 5"),
+        (shakmaty::Square::F6, "eff 6"),
+        (shakmaty::Square::G7, "gee 7"),
+        (shakmaty::Square::H8, "aitch 8"),
+    ] {
+        assert_eq!(roster::square_spoken(square), spoken);
+    }
+}
+
+/// `speech` and `text` are the same announcement: they differ only in how a square is
+/// spelled, never in the words around it.
+#[test]
+fn speech_differs_from_text_only_in_the_squares() {
+    let r = roster::of(&common::pos(common::BACK_RANK));
+    assert!(r.text().contains("g1"), "plain text keeps bare coordinates");
+    assert!(!r.speech().contains("g1"), "speech spells them out");
+    assert!(r.speech().contains("gee 1"));
+    assert!(r.text().starts_with("white to play."));
+    assert!(r.speech().starts_with("white to play."));
+}
+
 #[test]
 fn announces_the_side_to_move_first() {
     let r = roster::of(&common::pos(common::BACK_RANK_IDLE));

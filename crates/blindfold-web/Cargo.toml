@@ -31,9 +31,11 @@ web-sys = { version = "0.3", features = [
     "Element",
     "PointerEvent",
     # Text-to-speech: reading the puzzle and the verdict aloud (see `speech.rs`).
-    # `Window::speech_synthesis` is gated behind `SpeechSynthesis`.
+    # `Window::speech_synthesis` is gated behind `SpeechSynthesis`;
+    # `SpeechSynthesisVoice` is needed to pick a natural voice over the robotic default.
     "SpeechSynthesis",
     "SpeechSynthesisUtterance",
+    "SpeechSynthesisVoice",
     "Storage",
     "Window",
 ] }

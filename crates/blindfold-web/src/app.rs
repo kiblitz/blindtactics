@@ -149,7 +149,7 @@ pub fn App() -> impl IntoView {
         sound.set(on);
         settings::save_sound(on);
         if on {
-            speech::say(&position.with_untracked(|p| roster::of(p).text()));
+            speech::say(&position.with_untracked(|p| roster::of(p).speech()));
         } else {
             speech::silence();
         }
@@ -192,9 +192,9 @@ pub fn App() -> impl IntoView {
     // with sound persisted-on, the browser may refuse for lack of a gesture; that
     // degrades to silence until the first interaction, which is acceptable.
     Effect::new(move |_| {
-        let text = position.with(|p| roster::of(p).text());
+        let spoken = position.with(|p| roster::of(p).speech());
         if sound.get_untracked() {
-            speech::say(&text);
+            speech::say(&spoken);
         }
     });
 

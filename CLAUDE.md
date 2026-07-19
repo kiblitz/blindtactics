@@ -602,12 +602,24 @@ Chrome, works offline (OS voices), and needs no permission. The read-aloud toggl
 speaker button in the header row (`BoardBar`), persisted (`settings::load_sound`), off by
 default. When on:
 
-- A new puzzle is read aloud — `roster::text()`, the sentence the data model was built to
-  produce (`"white to play. white: king d5, bishops b4 c6…"`).
+- A new puzzle is read aloud — `roster::speech()`, the **third** rendering the data model
+  was built for (alongside `text` and SVG). It is *not* `text()`: a speech engine reads a
+  bare file letter as a word, so "a2" comes out "ah two" (the article "a"). `speech()`
+  spells the file as its letter *name* — `square_spoken(a2)` → `"ay two"`, `b7` → `"bee
+  seven"` — while `text()` keeps plain "a2" for display and screen readers (which spell
+  coordinates themselves and would choke on "ay two"). The two share one `render(square:
+  fn)` so they can only differ in the square spelling, never the words. Pinned by
+  `tests/roster.rs`'s `every_file_is_spelled_out` and `speech_spells_files_as_letter_names`.
 - The verdict is spoken on submit/give-up — `session::spoken(solve, solver)`, the spoken
   sibling of the panel's `Verdict`, reusing `explain` so the voice and the screen cannot
   say different things, and holding the same discretion (never the move count, so no depth
   leak).
+- The **voice is chosen, not the platform default** — `speech::best_voice` scores the
+  available English voices by name (the only quality signal the API gives) to prefer the
+  natural/neural families (Microsoft "Natural", Google, Apple "Enhanced") over the robotic
+  bundled desktop voices (Windows SAPI "David"/"Zira"), which otherwise read the puzzle in
+  a jarring monotone. `None` (no English voice, or the list not yet loaded) falls back to
+  the browser default. This is a heuristic that only has to order voices on one device.
 
 Two `Effect`s in `app` do the announcing: one subscribes to `position` (fires on load and
 every `next`), one to `solve` (fires when a verdict appears, not on a reveal step). Both
