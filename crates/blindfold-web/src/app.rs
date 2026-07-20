@@ -1,6 +1,7 @@
 //! The root component: holds the state, wires the panels to the board.
 
 use crate::board;
+use crate::chime;
 use crate::constants;
 use crate::database;
 use crate::line;
@@ -208,13 +209,17 @@ pub fn App() -> impl IntoView {
     let step_forward = move |()| attempt.update(session::Attempt::step_forward);
     let step_to = move |ply: usize| attempt.update(|a| a.step_to(ply));
 
-    // Read the current puzzle's roster aloud on demand — the roster panel's speak
-    // button. Always available regardless of the output mode: the setting only governs
-    // *automatic* reading, this is the user asking for it (and the click is the gesture
-    // browsers require before speech).
-    let speak_roster = move |()| {
+    // Read the current puzzle's roster aloud. `speech::say` deafens the recogniser for
+    // the read (the echo guard), so this doubles as the mechanism that holds the mic off
+    // while the roster plays — the shared core of three call sites: the roster panel's
+    // speak button, the spoken "repeat" command, and the new-puzzle auto-read.
+    let say_roster = move || {
         speech::say(&position.with_untracked(|p| roster::of(p).speech()));
     };
+    // The roster panel's speak button. Always available regardless of the output mode:
+    // the setting only governs *automatic* reading, this is the user asking for it (and
+    // the click is the gesture browsers require before speech).
+    let speak_roster = move |()| say_roster();
 
     // --- voice input ---------------------------------------------------------
     //
@@ -224,6 +229,17 @@ pub fn App() -> impl IntoView {
     // the very same action closures the buttons use so the two paths cannot diverge.
     let mic_supported = recognition::is_supported();
 
+    // Tear down the silence countdown without touching the mic — the timer only, so it
+    // can be stopped on a new puzzle or reused inside `deafen`. Clearing the interval and
+    // the shown number are one action so the display and the timer cannot fall out of step.
+    let stop_countdown = move || {
+        countdown.set(None);
+        if let Some(handle) = interval.get_untracked() {
+            handle.clear();
+            interval.set(None);
+        }
+    };
+
     // Turn the mic off and tear down the countdown — the mechanical stop. Does *not*
     // touch `mic_desired`: the record toggle and only the record toggle records the
     // user's intent, so a silence timeout or a new-puzzle reset does not look like the
@@ -232,18 +248,16 @@ pub fn App() -> impl IntoView {
         recognition::stop();
         listening.set(false);
         preview.set(None);
-        countdown.set(None);
-        if let Some(handle) = interval.get_untracked() {
-            handle.clear();
-            interval.set(None);
-        }
+        stop_countdown();
     };
 
     // (Re)start the silence countdown from the configured seconds. Every heard phrase
-    // calls this, so the timer only elapses after a real silence. Silence marks the end
-    // of the spoken line: on reaching zero it *submits* what was said, then `deafen`s so
-    // the record control goes neutral on its own. The user speaks the whole line, stops,
-    // and the pause is the "submit".
+    // *after the first move* calls this (see `handle_voice`), so the timer only elapses
+    // after a real silence — and only once the user has begun a line, never during the
+    // open-ended think time before it. Silence marks the end of the spoken line: on
+    // reaching zero it *submits* what was said, then `deafen`s so the record control goes
+    // neutral on its own. The user speaks the whole line, stops, and the pause is the
+    // "submit".
     let start_countdown = move || {
         countdown.set(Some(silence_secs.get_untracked()));
         if interval.get_untracked().is_some() {
@@ -251,6 +265,12 @@ pub fn App() -> impl IntoView {
         }
         let handle = set_interval_with_handle(
             move || {
+                // Hold steady while the app is speaking (a roster read, a "repeat"): the
+                // mic is deafened for its duration and the user is listening, not pausing,
+                // so a tick then would time a silence they did not choose.
+                if speech::is_speaking() {
+                    return;
+                }
                 let remaining = countdown.get_untracked().unwrap_or(0).saturating_sub(1);
                 if remaining == 0 {
                     // The last spoken move is held as a preview (confirm-on-next) until the
@@ -280,9 +300,6 @@ pub fn App() -> impl IntoView {
     };
 
     let handle_voice = move |transcript: String, is_final: bool| {
-        // Any speech — even a partial — is activity: restart the silence countdown.
-        start_countdown();
-
         // A transcript that no longer extends the last one is a fresh recogniser session
         // (Chrome closed the previous on its own silence and reopened), so its moves count
         // from zero. A transcript that *does* extend the last one is the same line still
@@ -328,9 +345,10 @@ pub fn App() -> impl IntoView {
                         diction::Command::Clear => clear(()),
                         diction::Command::Next => next(()),
                         diction::Command::GiveUp => give_up(()),
-                        diction::Command::Repeat => {
-                            speech::say(&position.with_untracked(|p| roster::of(p).speech()));
-                        }
+                        // Re-read the roster. `say_roster` deafens the mic for the read
+                        // and the countdown holds while it speaks (see `start_countdown`),
+                        // so "repeat" turns the mic off, plays the roster, and resumes.
+                        diction::Command::Repeat => say_roster(),
                     }
                     idx += 1;
                 }
@@ -374,7 +392,18 @@ pub fn App() -> impl IntoView {
                 session::Heard::Draw { arrow } => Some(arrow),
                 _ => None,
             });
+
+        // Start (or reset) the silence-to-submit countdown only once a move is actually
+        // in — a committed arrow or the in-flight preview ghost. Before the first move the
+        // mic waits with no time limit (the think-time before a line is the user's own);
+        // once a move is in, every further phrase resets the timer and a pause past it
+        // submits. A phrase that draws nothing yet (a mid-thought "knight" awaiting its
+        // square) does not arm the timer.
+        let has_move = attempt.with_untracked(|a| !a.arrows().is_empty()) || ghost.is_some();
         preview.set(ghost);
+        if has_move {
+            start_countdown();
+        }
     };
 
     // Start listening, returning whether it actually started. Drives the silence
@@ -386,7 +415,9 @@ pub fn App() -> impl IntoView {
             // Fresh session: the streaming move counter and heard-transcript start over.
             committed.set(0);
             heard_so_far.set(String::new());
-            start_countdown();
+            // No countdown yet — the mic stays on indefinitely until the first move is
+            // spoken (`handle_voice` arms the timer then). The silence-to-submit timer is
+            // for pausing *after* a line, not for the open-ended think time before it.
             true
         } else {
             false
@@ -434,19 +465,27 @@ pub fn App() -> impl IntoView {
     });
     on_cleanup(move || keydown.remove());
 
-    // Arm or disarm the mic for a *new* puzzle, per the input mode. Subscribes to
-    // `puzzle` only (fires on load and every `next`) and reads the mode and the last
-    // intent untracked, so toggling a mode mid-puzzle actuates nothing — the effect
-    // fires when the puzzle changes, which is when re-arming is wanted. In audio mode a
-    // mic already running just keeps running (no restart, no gap); in draw mode a mic
-    // left on from the previous puzzle is turned off.
+    // Set a *new* puzzle up for voice: reset the streaming state, arm or disarm the mic
+    // per the input mode, then (if the output speaks) read the roster aloud. Subscribes
+    // to `puzzle` only (fires on load and every `next`) and reads the modes and the last
+    // mic intent untracked, so toggling a mode mid-puzzle actuates nothing — this fires
+    // when the puzzle changes, which is when re-arming is wanted.
+    //
+    // The order is load-bearing: arm the mic *before* reading the roster. `say` deafens
+    // the recogniser for the read (the echo guard), so a just-armed mic is held off for
+    // the whole roster and only starts hearing on the utterance's `end`. Reading first
+    // would leave a window where the mic could come up mid-roster and hear it back.
+    // (In audio mode a mic already running keeps running — no restart, no gap; in draw
+    // mode a mic left on from the previous puzzle is turned off.)
     Effect::new(move |_| {
         puzzle.track();
-        // The line is empty again, so the streaming move counter resets — a mic left on
-        // across puzzles (audio mode) would otherwise carry the last count into a new line.
+        // A fresh line: reset the streaming counters and stop any countdown a mic carried
+        // across puzzles (audio mode) was running — the new empty line has no move in yet.
         committed.set(0);
         heard_so_far.set(String::new());
         preview.set(None);
+        stop_countdown();
+
         let want = input_mode
             .get_untracked()
             .arms_next(mic_desired.get_untracked());
@@ -456,27 +495,34 @@ pub fn App() -> impl IntoView {
         } else if !want && now {
             deafen();
         }
-    });
 
-    // Read the puzzle aloud when a new one is served, if the output mode speaks.
-    // Subscribes to `position` (so it fires on load and on every `next`) but reads
-    // `output` untracked — switching the mode must not re-read the roster through here
-    // (selecting a setting actuates nothing). On the very first run the browser may
-    // refuse for lack of a gesture; that degrades to silence until the first
-    // interaction, which is acceptable.
-    Effect::new(move |_| {
-        let spoken = position.with(|p| roster::of(p).speech());
+        // Auto-read the roster if the output mode speaks. On the very first run the browser
+        // may refuse for lack of a gesture; that degrades to silence until the first
+        // interaction, which is acceptable. `output` is read untracked — switching the mode
+        // must not re-read the roster (selecting a setting actuates nothing).
         if output.get_untracked().speaks() {
-            speech::say(&spoken);
+            say_roster();
         }
     });
 
-    // Speak the verdict the moment a submission or give-up produces one. Subscribes to
-    // `solve` only: it fires when the verdict appears, not when the reveal is stepped
-    // (that changes `ply`, not `solve`) and not when the mode is toggled (read
-    // untracked).
+    // Sound the moment a submission or give-up produces a verdict, and speak it. Subscribes
+    // to `solve` only: it fires when the verdict appears, not when the reveal is stepped
+    // (that changes `ply`, not `solve`) and not when a mode is toggled (read untracked).
+    //
+    // The chime plays in *any* mode — it is instant feedback, not reading aloud, so the
+    // output setting does not govern it. A solved mate dings; every scored loss (a miss, an
+    // overshoot, or a give-up) buzzes; the unscored results (an incomplete promotion, an
+    // unjudged line) make no sound. The spoken sentence is the detailed sibling, and it
+    // *is* gated on the read-aloud mode.
     Effect::new(move |_| {
         if let Some(verdict) = solve.get() {
+            match &verdict {
+                session::Solve::Solved(_) => chime::correct(),
+                session::Solve::GaveUp(_)
+                | session::Solve::Overshot { .. }
+                | session::Solve::Refuted { .. } => chime::wrong(),
+                session::Solve::Incomplete(_) | session::Solve::Unjudged(_) => {}
+            }
             if output.get_untracked().speaks() {
                 speech::say(&session::spoken(&verdict, solver.get_untracked()));
             }

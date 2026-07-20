@@ -14,6 +14,7 @@
 
 pub mod app;
 pub mod board;
+pub mod chime;
 pub mod constants;
 pub mod database;
 pub mod line;

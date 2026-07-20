@@ -237,3 +237,29 @@ test("a pause past the silence threshold submits the spoken line", async ({ page
 
   expect(errors).toEqual([]);
 });
+
+// The mic has no grace-period timeout: the silence-to-submit countdown only begins once a
+// move is actually in. So a mic armed and then left silent — the think time before the
+// first move — must NOT submit (which would score a loss on an empty line) and must stay
+// armed. This is the exact behaviour the old code got wrong: it started the countdown the
+// moment the mic armed, so a silent think would turn the mic off (and, on a non-empty line,
+// submit). Uses the 2s minimum timeout and waits comfortably past it.
+test("the mic waits without submitting until the first move is spoken", async ({ page }) => {
+  const errors = collectErrors(page);
+
+  await pinAndFake(page, 0.95);
+  await setSilence(page, 2);
+  await page.goto("/");
+  await expect(page.locator(".board")).toBeVisible();
+
+  await armMic(page);
+
+  // Stay silent well past the silence threshold — no transcript fired at all.
+  await page.waitForTimeout(3500);
+
+  // The mic is still armed and nothing has been submitted: the board stays blind.
+  await expect(page.locator(".button--recording")).toHaveCount(1);
+  await expect(page.locator(".board--revealed")).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});

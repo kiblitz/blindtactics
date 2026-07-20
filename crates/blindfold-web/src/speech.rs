@@ -79,6 +79,17 @@ fn resume_when_done(utterance: &web_sys::SpeechSynthesisUtterance) {
     });
 }
 
+/// Whether the browser is currently speaking or has an utterance queued.
+///
+/// Used to hold the spoken-input silence countdown while the app talks: a read-aloud —
+/// a new puzzle's roster, or a "repeat" — should not count against the user's think
+/// time, and the mic is deafened for its duration anyway (the echo guard), so a tick
+/// during it would be timing a silence the user did not choose. `false` where there is
+/// no speech synthesis at all.
+pub fn is_speaking() -> bool {
+    synthesis().is_some_and(|s| s.speaking() || s.pending())
+}
+
 /// Stop any speech in progress — used when muting, so turning sound off is immediate
 /// rather than "after the current sentence finishes".
 pub fn silence() {
