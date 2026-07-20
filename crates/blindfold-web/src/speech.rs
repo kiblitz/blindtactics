@@ -22,20 +22,21 @@ use wasm_bindgen::JsCast as _;
 /// — the user has moved on, so the voice should too.
 ///
 /// Deafens the recogniser for the utterance, so voice mode does not hear its own
-/// read-aloud and re-parse it as a move: [`recognition::pause`] before speaking,
-/// [`recognition::resume`] when it ends. A no-op when the mic is off.
+/// read-aloud and re-parse it as a move: [`recognition::pause`] before speaking, then
+/// [`recognition::resume_after_speech`] to un-deafen once the speech is actually done. A
+/// no-op when the mic is off.
 pub fn say(text: &str) {
     let Some(synthesis) = synthesis() else {
         return;
     };
-    // Cancel any speech in progress *before* pausing the mic. The cancelled utterance's
-    // own `end` event may fire a beat later; by then this new utterance is speaking, so
-    // `resume_when_done`'s guard sees `speaking()` and does not un-deafen the recogniser
-    // mid-sentence.
+    // Cancel any speech in progress *before* pausing the mic, so a new announcement does
+    // not wait behind the last. The resume is a poll on the synth's own idle state (see
+    // [`recognition::resume_after_speech`]), so a cancel-then-speak chain resumes only once
+    // the *newer* utterance finishes, never mid-sentence.
     synthesis.cancel();
     recognition::pause();
     let Ok(utterance) = web_sys::SpeechSynthesisUtterance::new_with_text(text) else {
-        // Nothing will speak, so nothing will fire `end` to resume — do it here.
+        // Nothing will speak, so nothing would ever go idle-after-speaking — un-deafen now.
         recognition::resume();
         return;
     };
@@ -47,36 +48,12 @@ pub fn say(text: &str) {
     if let Some(voice) = best_voice(&synthesis) {
         utterance.set_voice(Some(&voice));
     }
-    resume_when_done(&utterance);
     synthesis.speak(&utterance);
-}
-
-/// Resume the paused mic when `utterance` ends — but only if nothing else is speaking
-/// or queued, so a rapid re-`say` (roster then verdict) does not un-deafen the
-/// recogniser between the two.
-///
-/// One shared closure, held for the life of the page in a thread-local and reused for
-/// every utterance's `end`/`error`, so `say` does not leak one per call. It reads the
-/// synthesis handle itself rather than capturing one, which is what lets it be a single
-/// stateless closure.
-fn resume_when_done(utterance: &web_sys::SpeechSynthesisUtterance) {
-    thread_local! {
-        static RESUME: wasm_bindgen::closure::Closure<dyn FnMut()> =
-            wasm_bindgen::closure::Closure::new(|| {
-                if let Some(s) = synthesis() {
-                    if !s.speaking() && !s.pending() {
-                        recognition::resume();
-                    }
-                }
-            });
-    }
-    RESUME.with(|resume| {
-        let function = resume.as_ref().unchecked_ref::<js_sys::Function>();
-        utterance.set_onend(Some(function));
-        // An error (e.g. an interrupted utterance) must resume just like a clean end,
-        // or a hiccup would strand the mic paused for the rest of the session.
-        utterance.set_onerror(Some(function));
-    });
+    // Un-deafen once this finishes. Deliberately a poll on `speechSynthesis`, not the
+    // utterance's `end` event: Chrome fires `end` unreliably (and sometimes with `speaking`
+    // still true in the handler), which stranded the mic deafened after a roster read in
+    // read-aloud mode. Called *after* `speak` so the utterance is already queued.
+    recognition::resume_after_speech();
 }
 
 /// Whether the browser is currently speaking or has an utterance queued.

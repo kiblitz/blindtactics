@@ -332,8 +332,10 @@ its only consumer. That is the line; it is not "no strings in core".
   is built in core (`roster::speech`) and `session` (`spoken`); this only hands a finished
   string to the browser, and degrades to silence where there is no voice. It is also the
   **single choke point that deafens the mic while the app speaks**: `say` calls
-  `recognition::pause` before speaking and resumes on the utterance's `end` (guarded so a
-  rapid re-`say` does not un-deafen between two utterances). `is_speaking()` (speaking or
+  `recognition::pause` before speaking and `recognition::resume_after_speech` after — which
+  **polls `speechSynthesis` to un-deafen once it goes idle, rather than trusting the
+  utterance's `end` event** (Chrome fires `end` unreliably, which stranded the mic deafened
+  in read-aloud mode — "the mic didn't start"). `is_speaking()` (speaking or
   queued) is read by the silence countdown so the timer *holds* while the app talks — a
   roster read or a "repeat" is not the user pausing. Browser-only by nature, like `storage`.
 - `chime` — the two feedback tones, a rising two-note "ding" (`correct()`) and a low buzz
@@ -923,17 +925,21 @@ The browser half (built):
 - **The echo guard — deafen, don't just ignore.** With the mic on, the recogniser hears the
   app's own read-aloud (a confirmation, a question, the roster, the verdict) and would
   re-parse it as a move — a feedback loop that draws a spurious arrow. `speech::say`
-  therefore **pauses the recogniser** (`recognition::pause`) before speaking and resumes it
-  (`recognition::resume`) on the utterance's `end`/`error`. With Vosk this is literal: `pause`
-  flips a flag that stops feeding audio buffers to `acceptWaveform` (the graph stays up, so
-  `resume` just un-gates it), so nothing is heard to mishear and there is no time window to
+  therefore **pauses the recogniser** (`recognition::pause`) before speaking and, right after
+  `speak()`, arms `recognition::resume_after_speech`. With Vosk the pause is literal: it flips
+  a flag that stops feeding audio buffers to `acceptWaveform` (the graph stays up, so the
+  resume just un-gates it), so nothing is heard to mishear and there is no time window to
   estimate. Centralising it in `say` (the single choke point for *all* TTS) covers every echo
-  source at once. Two subtleties: `cancel()` runs *before* `pause()`, so a cancelled utterance's
-  late `end` sees the new one speaking and does not un-deafen mid-sentence; and `resume` is
-  guarded on `!speaking() && !pending()`, so a rapid re-`say` (roster then verdict) does not
-  un-deafen between the two. Safe against over-pausing because the flow is turn-based (the user
-  waits for the app to finish). A no-op when the mic is off. **Not e2e-testable** (the pause
-  gating happens below the transcript seam the fake recogniser feeds).
+  source at once. **The resume is a poll on `speechSynthesis`, not the utterance's `end`
+  event** — Chrome fires `end` unreliably (and sometimes with `speaking` still true in the
+  handler), which is exactly what stranded the mic deafened after a roster read in read-aloud
+  mode ("the mic didn't start"). The poll un-gates once the synth reports idle
+  (`!speaking && !pending`), robustly whether or not `end` fires, and it handles a
+  cancel-then-speak chain for free: while the newer utterance is speaking the synth is not
+  idle, so it never un-deafens mid-sentence. Safe against over-pausing because the flow is
+  turn-based (the user waits for the app to finish). A no-op when the mic is off. **Not
+  e2e-testable** (the pause gating happens below the transcript seam the fake recogniser
+  feeds, and headless `speechSynthesis` has no voices so it never reports non-idle).
 - `app` wiring: the record button (in the line panel, shown only when supported) toggles
   listening. **Arming does not read the roster** — turning on the mic must not, on its own,
   start talking (the user's call); the roster is read only by the `Output` auto-read or the

@@ -187,21 +187,54 @@ export function bft_recognition_start(onTranscript) {
   return true;
 }
 
+// The echo guard un-gates the mic once the app has finished speaking. It polls
+// `speechSynthesis` rather than trusting an utterance's `end` event, which Chrome fires
+// unreliably — and sometimes with `speaking` still true inside the handler. That was the
+// bug behind a mic that never came back on in read-aloud mode: the roster (or verdict)
+// deafened the recogniser and the `end`-driven resume never ran. Polling un-deafens
+// robustly whether or not `end` fires. 150 ms is imperceptible against turn-based speech.
+let _resumePoll = null;
+
+function bft_clear_resume_poll() {
+  if (_resumePoll !== null) { clearInterval(_resumePoll); _resumePoll = null; }
+}
+
 export function bft_recognition_stop() {
   _wantListening = false;
   _paused = false;
+  bft_clear_resume_poll();
   bft_stop_audio();
 }
 
 // Pause for the app's own speech: stop feeding audio but keep `_wantListening`, so the
-// graph stays up and [`resume`] just un-gates it. A no-op when the mic is off.
+// graph stays up and a resume just un-gates it. A no-op when the mic is off.
 export function bft_recognition_pause() {
   if (!_wantListening || _paused) return;
   _paused = true;
 }
 
+// Resume immediately — the mic was re-armed, or nothing will actually speak. Cancels any
+// pending resume poll so the two paths do not fight.
 export function bft_recognition_resume() {
+  bft_clear_resume_poll();
   if (_wantListening && _paused) _paused = false;
+}
+
+// Resume once the app finishes speaking. Called by `speech::say` right after `speak()`, so
+// the utterance is already queued (`pending`); the poll waits for `speechSynthesis` to go
+// idle, then un-gates the mic. Handles a cancel-then-speak chain correctly: while the newer
+// utterance is speaking the synth is not idle, so it does not un-deafen mid-sentence. A
+// no-op when the mic is off.
+export function bft_recognition_resume_after_speech() {
+  if (!_wantListening) return;
+  if (_resumePoll !== null) return; // already watching
+  _resumePoll = setInterval(() => {
+    const s = window.speechSynthesis;
+    if (!s || (!s.speaking && !s.pending)) {
+      bft_clear_resume_poll();
+      if (_wantListening) _paused = false;
+    }
+  }, 150);
 }
 
 // Kick off the one-time library + model download *now*, without touching the mic or the
@@ -226,6 +259,8 @@ extern "C" {
     fn pause_js();
     #[wasm_bindgen(js_name = bft_recognition_resume)]
     fn resume_js();
+    #[wasm_bindgen(js_name = bft_recognition_resume_after_speech)]
+    fn resume_after_speech_js();
     #[wasm_bindgen(js_name = bft_recognition_warm)]
     fn warm_js();
 }
@@ -277,14 +312,24 @@ pub fn stop() {
 ///
 /// Called by [`crate::speech::say`] before it speaks, so the recogniser does not hear its
 /// own text-to-speech and re-parse it as a move. Unlike [`stop`], this keeps the graph up
-/// and the "we want to listen" intent, so [`resume`] brings it straight back. A no-op when
+/// and the "we want to listen" intent, so a resume brings it straight back. A no-op when
 /// the mic is off.
 pub fn pause() {
     pause_js();
 }
 
-/// Resume a mic paused by [`pause`]. Called when the app's utterance ends. A no-op if the
-/// mic is off or was not paused.
+/// Resume a paused mic immediately. Used when the mic is re-armed, or when nothing will
+/// actually be spoken. Cancels any pending [`resume_after_speech`] poll. A no-op if the mic
+/// is off or was not paused.
 pub fn resume() {
     resume_js();
+}
+
+/// Resume the mic once the app has finished speaking, by polling `speechSynthesis` rather
+/// than trusting an utterance's `end` event (which Chrome fires unreliably — the cause of a
+/// mic that never came back on in read-aloud mode). Called by [`crate::speech::say`] right
+/// after it queues an utterance, so the poll sees the pending speech and waits for it. A
+/// no-op when the mic is off.
+pub fn resume_after_speech() {
+    resume_after_speech_js();
 }
