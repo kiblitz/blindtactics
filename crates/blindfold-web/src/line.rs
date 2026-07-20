@@ -38,11 +38,9 @@ pub fn Line(
     /// Whether this browser can do speech recognition at all. When `false` the record
     /// control is not rendered — the feature is simply absent rather than a dead button.
     mic_supported: bool,
-    /// Whether the mic is armed (the record control glows red) and, while it is, the
-    /// live silence countdown shown beside it.
+    /// Whether the mic is armed — the record control glows red while it is.
     #[prop(into)]
     listening: Signal<bool>,
-    #[prop(into)] countdown: Signal<Option<u32>>,
     #[prop(into)] on_toggle_mic: Callback<()>,
     #[prop(into)] on_undo: Callback<()>,
     #[prop(into)] on_clear: Callback<()>,
@@ -121,11 +119,11 @@ pub fn Line(
 
             <div class="controls">
                 // The record control — a compact circular button (a mic when idle, a
-                // pulsing red disc showing the silence countdown while armed), sitting
-                // inline with the editing/reveal buttons rather than on its own row.
-                // Leads the row and stays put across the editing/revealed switch, so
-                // speaking a move before a solve and "next" after one share one control.
-                // Only rendered where recognition exists, so it never appears dead.
+                // pulsing red disc while armed), sitting inline with the editing/reveal
+                // buttons rather than on its own row. Leads the row and stays put across
+                // the editing/revealed switch, so speaking a move before a solve and
+                // "next" after one share one control. Only rendered where recognition
+                // exists, so it never appears dead.
                 {mic_supported
                     .then(|| {
                         view! {
@@ -135,25 +133,15 @@ pub fn Line(
                                 aria-pressed=move || listening.get().to_string()
                                 aria-label="Voice input"
                                 title=move || {
-                                    match (listening.get(), countdown.get()) {
-                                        (true, Some(secs)) => format!("Listening — {secs}s left"),
-                                        (true, None) => "Listening — tap to stop".to_string(),
-                                        (false, _) => "Speak your moves".to_string(),
+                                    if listening.get() {
+                                        "Listening — tap to stop"
+                                    } else {
+                                        "Speak your moves"
                                     }
                                 }
                                 on:click=move |_| on_toggle_mic.run(())
                             >
-                                {move || {
-                                    match (listening.get(), countdown.get()) {
-                                        // Armed: the seconds left, counting down inside the
-                                        // disc the way a recording app's ring does.
-                                        (true, Some(secs)) => {
-                                            view! { <span class="mono">{secs}</span> }.into_any()
-                                        }
-                                        (true, None) => view! { "●" }.into_any(),
-                                        (false, _) => view! { "🎤" }.into_any(),
-                                    }
-                                }}
+                                {move || if listening.get() { "●" } else { "🎤" }}
                             </button>
                         }
                     })}

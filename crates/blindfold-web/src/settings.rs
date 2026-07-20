@@ -4,9 +4,9 @@
 //! `load_*`/`save_*` pairs touch `localStorage` (via [`crate::storage`]). The
 //! preferences: which side of the board faces the user ([`Pov`]), how moves are
 //! entered ([`Input`]) and how the puzzle is delivered ([`Output`]) — the two halves
-//! of voice mode — and how long a silence ends spoken input ([`load_silence`]). Each
-//! persists under its own key so they move independently, and the module is the seam
-//! more settings grow against — another is another pair here, not a rewrite.
+//! of voice mode. Each persists under its own key so they move independently, and the
+//! module is the seam more settings grow against — another is another pair here, not a
+//! rewrite.
 
 use crate::constants;
 use crate::storage;
@@ -231,31 +231,4 @@ pub fn load_output() -> Output {
 /// Persist the output mode. Silent if `localStorage` is unavailable, like [`save_pov`].
 pub fn save_output(output: Output) {
     storage::write(constants::OUTPUT_STORAGE_KEY, output.token());
-}
-
-/// How many seconds of silence end a spoken line, clamped to a sane range.
-///
-/// Stored as the decimal number of seconds. A missing, malformed, or out-of-range
-/// value falls back to [`constants::SILENCE_DEFAULT_SECS`] rather than erroring — a
-/// corrupt preference is not something the user can act on.
-pub fn load_silence() -> u32 {
-    storage::read(constants::SILENCE_STORAGE_KEY)
-        .and_then(|raw| raw.parse::<u32>().ok())
-        .map(clamp_silence)
-        .unwrap_or(constants::SILENCE_DEFAULT_SECS)
-}
-
-/// Persist the silence timeout, clamped so a stored value can never fall outside the
-/// range the stepper allows. Silent if `localStorage` is unavailable, like [`save_pov`].
-pub fn save_silence(secs: u32) {
-    storage::write(
-        constants::SILENCE_STORAGE_KEY,
-        &clamp_silence(secs).to_string(),
-    );
-}
-
-/// Clamp a silence timeout to `[MIN, MAX]`. Pure and public so the stepper's bounds
-/// and the loader's recovery are the one rule, native-tested rather than trusted.
-pub fn clamp_silence(secs: u32) -> u32 {
-    secs.clamp(constants::SILENCE_MIN_SECS, constants::SILENCE_MAX_SECS)
 }

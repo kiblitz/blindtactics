@@ -53,6 +53,10 @@ pub enum Command {
     Next,
     /// Read the roster out again.
     Repeat,
+    /// Stop a roster read that is in progress — the spoken counterpart of tapping the
+    /// roster's speak button a second time. Distinct from [`Next`](Command::Next): it
+    /// cuts the read-aloud short without leaving the puzzle.
+    Skip,
     /// Reveal the solution, scored as a loss.
     GiveUp,
 }
@@ -538,8 +542,9 @@ fn command_word(word: &str) -> Option<Command> {
         "submit" | "done" | "enter" | "confirm" | "go" | "play" => Command::Submit,
         "undo" | "back" | "undone" | "delete" | "remove" | "oops" | "scratch" => Command::Undo,
         "clear" | "reset" | "erase" => Command::Clear,
-        "next" | "skip" | "another" | "forward" => Command::Next,
+        "next" | "another" | "forward" => Command::Next,
         "repeat" | "again" | "pardon" | "read" => Command::Repeat,
+        "skip" | "stop" | "quiet" | "hush" => Command::Skip,
         "resign" | "solution" | "reveal" | "giveup" | "give" => Command::GiveUp,
         _ => return None,
     })

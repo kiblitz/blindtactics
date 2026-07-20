@@ -821,9 +821,9 @@ fn an_unrecognised_phrase_asks_to_repeat() {
 
 #[test]
 fn a_later_move_resolves_against_the_line_played_forward() {
-    // The second move is resolved at the position after the first solver move *and*
-    // the opponent's reply — proving `interpret` plays the stored line forward rather
-    // than resolving every move against the start.
+    // The second move is resolved at the position after the first move the user drew
+    // *and* an opponent reply — proving `interpret` plays their line forward rather than
+    // resolving every move against the start.
     let puzzle = voice_puzzle(MATE_IN_2, "f6g6 b1b8");
     let first = "f6g6".parse::<arrow::Arrow>().unwrap();
     assert_eq!(
@@ -834,6 +834,27 @@ fn a_later_move_resolves_against_the_line_played_forward() {
         session::interpret("rook b8", &puzzle, &[first]),
         session::Heard::Draw {
             arrow: "b1b8".parse().unwrap(),
+        }
+    );
+}
+
+#[test]
+fn a_divergent_move_resolves_against_the_users_own_line_not_the_stored_one() {
+    // Regression, puzzle RM5TB. The stored mate opens with Qxf7 (c7f7), but Rxf7 (f3f7)
+    // is also legal from the start. A user who plays Rxf7 must then be able to speak
+    // "rook g7" — the rook is on f7 in *their* line, even though the stored solution
+    // never put it there. The old code resolved later moves against the stored line, so
+    // this came back illegal (the rook was still on f3) and the user could not enter a
+    // move they knew was wrong to see why.
+    let puzzle = voice_puzzle(
+        "8/2Q2pk1/7p/6pP/6K1/5R2/8/qq6 w - - 0 58",
+        "c7f7 f7f8 f3f7 f7g7",
+    );
+    let rxf7 = "f3f7".parse::<arrow::Arrow>().unwrap();
+    assert_eq!(
+        session::interpret("rook g7", &puzzle, &[rxf7]),
+        session::Heard::Draw {
+            arrow: "f7g7".parse().unwrap(),
         }
     );
 }

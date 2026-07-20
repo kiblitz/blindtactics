@@ -1059,24 +1059,10 @@ body {
   color: var(--chalk-faint);
 }
 
-/* Space each group off the one above — the menu now stacks several (point of view,
- * input, output, silence). The first heading keeps its flush top. */
+/* Space each group off the one above — the menu stacks several (point of view, input,
+ * output). The first heading keeps its flush top. */
 .settings__heading:not(:first-child) {
   margin-top: 0.7rem;
-}
-
-/* The silence-timeout stepper: − value + on one row. */
-.settings__stepper {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.settings__stepper-value {
-  min-width: 2.5rem;
-  text-align: center;
-  font-size: 0.85rem;
-  color: var(--chalk);
 }
 
 .settings__option {

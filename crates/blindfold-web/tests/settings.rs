@@ -5,7 +5,6 @@
 //! and this is where it is pinned — the sign of the flip especially, the same care
 //! `square` takes with the board geometry.
 
-use blindfold_web::constants;
 use blindfold_web::settings;
 
 #[test]
@@ -114,30 +113,4 @@ fn input_and_output_labels_are_distinct_and_present() {
     assert!(settings::Output::ALL
         .into_iter()
         .all(|o| !o.label().is_empty()));
-}
-
-// --- silence timeout ---------------------------------------------------------
-
-/// The silence timeout is clamped to `[MIN, MAX]`, so neither a stepper press nor a
-/// corrupt stored value can drive it out of the usable range. The default sits inside
-/// the range, so it survives clamping unchanged.
-#[test]
-fn silence_is_clamped_to_the_usable_range() {
-    assert_eq!(
-        settings::clamp_silence(0),
-        constants::SILENCE_MIN_SECS,
-        "below the floor clamps up"
-    );
-    assert_eq!(
-        settings::clamp_silence(9_999),
-        constants::SILENCE_MAX_SECS,
-        "above the ceiling clamps down"
-    );
-    // If the default were outside the range, clamping would change it and this would
-    // fail — so this doubles as the "default is within range" invariant.
-    assert_eq!(
-        settings::clamp_silence(constants::SILENCE_DEFAULT_SECS),
-        constants::SILENCE_DEFAULT_SECS,
-        "the default is inside the range and unchanged"
-    );
 }

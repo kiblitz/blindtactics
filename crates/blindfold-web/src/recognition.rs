@@ -57,6 +57,8 @@ const GRAMMAR = JSON.stringify([
   "castle", "short", "long",
   "takes", "check", "mate", "promote", "to",
   "submit", "undo", "clear", "next", "back", "repeat", "done", "enter", "go", "resign",
+  // "skip"/"stop" cut a roster read short (Command::Skip).
+  "skip", "stop",
   "[unk]",
 ]);
 

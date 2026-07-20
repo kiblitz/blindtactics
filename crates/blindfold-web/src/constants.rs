@@ -128,29 +128,6 @@ pub const INPUT_STORAGE_KEY: &str = "blindfold.input";
 /// The `localStorage` key the output mode (show / read-aloud) persists under.
 pub const OUTPUT_STORAGE_KEY: &str = "blindfold.output";
 
-/// The `localStorage` key the spoken-input silence timeout persists under.
-pub const SILENCE_STORAGE_KEY: &str = "blindfold.silence";
-
-/// How long a silence, in seconds, ends a spoken line once the mic is armed — the
-/// default, and the bounds the settings stepper (and the loader's recovery) clamp to.
-///
-/// The mic runs a countdown while listening; each heard phrase resets it, and when it
-/// reaches zero the record control turns itself off. Five seconds is long enough to
-/// think between moves without stranding the mic on. The range is a usability floor
-/// and ceiling, not a hard limit — below the floor a thinking pause would cut the mic,
-/// above the ceiling it barely turns off at all.
-pub const SILENCE_DEFAULT_SECS: u32 = 5;
-pub const SILENCE_MIN_SECS: u32 = 2;
-pub const SILENCE_MAX_SECS: u32 = 15;
-
-/// How much one press of the silence-timeout stepper moves it, in seconds.
-pub const SILENCE_STEP_SECS: u32 = 1;
-
-/// The tick of the silence countdown: one second, so the displayed number counts down
-/// in whole seconds. Named rather than an inline `Duration::from_secs(1)` at the call
-/// site, per the constants rule.
-pub const SILENCE_TICK_MS: u64 = 1000;
-
 /// Speaking rate for the read-aloud voice, as a multiple of the platform default
 /// (`1.0`). A touch under one so the roster is read at an unhurried, deliberate pace
 /// rather than the rushed default — the "calm" half of the voice.

@@ -2,7 +2,6 @@
 
 use crate::board;
 use crate::chime;
-use crate::constants;
 use crate::database;
 use crate::line;
 use crate::panel;
@@ -38,9 +37,6 @@ pub fn App() -> impl IntoView {
     // user gesture to start, and a page that talks or listens on load is a surprise.
     let input_mode = RwSignal::new(settings::load_input());
     let output = RwSignal::new(settings::load_output());
-    // How long a silence ends spoken input, persisted. Shown as a live countdown on
-    // the record control while the mic listens.
-    let silence_secs = RwSignal::new(settings::load_silence());
     // Start the browser loading its voice list now, so a good voice is chosen from the
     // very first announcement rather than after it (some browsers load voices async).
     speech::warm();
@@ -58,11 +54,6 @@ pub fn App() -> impl IntoView {
     // mode re-arms the mic on a new puzzle from the last intent (see `Input::arms_next`).
     let listening = RwSignal::new(false);
     let mic_desired = RwSignal::new(false);
-    // The silence countdown shown on the record control (`None` when not listening),
-    // and the interval driving it. `IntervalHandle` is `Copy`, so a plain signal holds
-    // it; nothing subscribes, it is just somewhere to keep the handle to clear later.
-    let countdown = RwSignal::new(None::<u32>);
-    let interval = RwSignal::new(None::<IntervalHandle>);
     // The provisional arrow streamed onto the board while the user is still speaking a
     // move — shown ghosted, replaced by a committed arrow once the move is settled.
     let preview = RwSignal::new(None::<arrow::Arrow>);
@@ -157,7 +148,7 @@ pub fn App() -> impl IntoView {
     let submit = move |_| {
         // Prime the chime's audio context while we (may) still be inside the click
         // gesture, so the verdict's tone is not swallowed by a suspended context. A
-        // no-op when driven from the silence timer, where the mic tap already warmed it.
+        // no-op when driven from a spoken "submit", where the mic tap already warmed it.
         chime::warm();
         let line = attempt.with_untracked(|a| a.arrows().to_vec());
         let verdict = puzzle.with_untracked(|p| session::solve(p, &line));
@@ -210,14 +201,6 @@ pub fn App() -> impl IntoView {
             settings::save_output(chosen);
         }
     };
-    let set_silence = move |secs: u32| {
-        let secs = settings::clamp_silence(secs);
-        if silence_secs.get_untracked() != secs {
-            silence_secs.set(secs);
-            settings::save_silence(secs);
-        }
-    };
-
     let undo = move |()| attempt.update(session::Attempt::undo);
     let clear = move |()| attempt.update(session::Attempt::clear);
     let promote = move |(index, role): (usize, Option<shakmaty::Role>)| {
@@ -234,10 +217,18 @@ pub fn App() -> impl IntoView {
     let say_roster = move || {
         speech::say(&position.with_untracked(|p| roster::of(p).speech()));
     };
-    // The roster panel's speak button. Always available regardless of the output mode:
-    // the setting only governs *automatic* reading, this is the user asking for it (and
-    // the click is the gesture browsers require before speech).
-    let speak_roster = move |()| say_roster();
+    // The roster panel's speak button — a toggle, not a restart. If the roster (or any
+    // read-aloud) is already playing, a press stops it; otherwise it reads the roster.
+    // Always available regardless of the output mode: the setting only governs
+    // *automatic* reading, this is the user asking for it (and the click is the gesture
+    // browsers require before speech). The spoken "skip" command is the voice sibling.
+    let speak_roster = move |()| {
+        if speech::is_speaking() {
+            speech::silence();
+        } else {
+            say_roster();
+        }
+    };
 
     // --- voice input ---------------------------------------------------------
     //
@@ -247,80 +238,14 @@ pub fn App() -> impl IntoView {
     // the very same action closures the buttons use so the two paths cannot diverge.
     let mic_supported = recognition::is_supported();
 
-    // Tear down the silence countdown without touching the mic — the timer only, so it
-    // can be stopped on a new puzzle or reused inside `deafen`. Clearing the interval and
-    // the shown number are one action so the display and the timer cannot fall out of step.
-    let stop_countdown = move || {
-        countdown.set(None);
-        if let Some(handle) = interval.get_untracked() {
-            handle.clear();
-            interval.set(None);
-        }
-    };
-
-    // Turn the mic off and tear down the countdown — the mechanical stop. Does *not*
-    // touch `mic_desired`: the record toggle and only the record toggle records the
-    // user's intent, so a silence timeout or a new-puzzle reset does not look like the
-    // user disarming (which in audio mode would stop it re-arming next puzzle).
+    // Turn the mic off — the mechanical stop. Does *not* touch `mic_desired`: the record
+    // toggle and only the record toggle records the user's intent, so a new-puzzle reset
+    // does not look like the user disarming (which in audio mode would stop it re-arming
+    // next puzzle).
     let deafen = move || {
         recognition::stop();
         listening.set(false);
         preview.set(None);
-        stop_countdown();
-    };
-
-    // (Re)start the silence countdown from the configured seconds. Every heard phrase
-    // *after the first move* calls this (see `handle_voice`), so the timer only elapses
-    // after a real silence — and only once the user has begun a line, never during the
-    // open-ended think time before it. Silence marks the end of the spoken line: on
-    // reaching zero it *submits* what was said, then `deafen`s so the record control goes
-    // neutral on its own. The user speaks the whole line, stops, and the pause is the
-    // "submit".
-    let start_countdown = move || {
-        countdown.set(Some(silence_secs.get_untracked()));
-        if interval.get_untracked().is_some() {
-            return;
-        }
-        let handle = set_interval_with_handle(
-            move || {
-                // Hold steady while the app is speaking (a roster read, a "repeat"): the
-                // mic is deafened for its duration and the user is listening, not pausing,
-                // so a tick then would time a silence they did not choose.
-                if speech::is_speaking() {
-                    return;
-                }
-                let remaining = countdown.get_untracked().unwrap_or(0).saturating_sub(1);
-                if remaining == 0 {
-                    // The last spoken move is held as a preview (confirm-on-next) until the
-                    // next segment or the recogniser's final settles it. A silence submits
-                    // before either may arrive, so commit that ghost first — otherwise the
-                    // line would be short its final move.
-                    if let Some(arrow) = preview.get_untracked() {
-                        attempt.update(|a| a.draw(arrow));
-                        preview.set(None);
-                    }
-                    // Submit the assembled line — but only when there is one to judge and
-                    // the board is not already revealed (submitting nothing, or a solved
-                    // line again, would score a spurious loss).
-                    let ready =
-                        attempt.with_untracked(|a| !a.arrows().is_empty() && !a.is_revealed());
-                    if ready {
-                        submit(());
-                    }
-                    // Keep the mic ON — only the countdown stops. The pause *was* the
-                    // submit, but the hands-free loop continues from here: the user speaks
-                    // "next" to advance, or (on a miss) "clear" and tries again, all without
-                    // touching the device. Deafening here (the old behaviour) stranded the
-                    // user with a dead mic the moment their line auto-submitted.
-                    leptos::logging::log!("voice: silence-submit (ready={ready}); mic stays on");
-                    stop_countdown();
-                } else {
-                    countdown.set(Some(remaining));
-                }
-            },
-            std::time::Duration::from_millis(constants::SILENCE_TICK_MS),
-        );
-        interval.set(handle.ok());
     };
 
     let handle_voice = move |transcript: String, is_final: bool| {
@@ -370,9 +295,14 @@ pub fn App() -> impl IntoView {
                         diction::Command::Next => next(()),
                         diction::Command::GiveUp => give_up(()),
                         // Re-read the roster. `say_roster` deafens the mic for the read
-                        // and the countdown holds while it speaks (see `start_countdown`),
-                        // so "repeat" turns the mic off, plays the roster, and resumes.
+                        // (the echo guard), so "repeat" turns the mic off, plays the
+                        // roster, and resumes.
                         diction::Command::Repeat => say_roster(),
+                        // Cut a roster read short. `speech::silence` cancels it, and the
+                        // resume poll un-deafens the mic once the synth goes idle. (A read
+                        // in progress has the mic deafened, so this fires from a live mic
+                        // between reads — the roster speak button is the touch sibling.)
+                        diction::Command::Skip => speech::silence(),
                     }
                     idx += 1;
                 }
@@ -383,6 +313,10 @@ pub fn App() -> impl IntoView {
                     match heard {
                         session::Heard::Draw { arrow } => {
                             attempt.update(|a| a.draw(arrow));
+                            // A short ding confirms each move the mic understood and drew
+                            // — the audio counterpart of the arrow appearing, so a
+                            // hands-free solver hears their line building without looking.
+                            chime::correct();
                             idx += 1;
                         }
                         // A question or miss: speak it (on a final only, so an interim does
@@ -404,8 +338,8 @@ pub fn App() -> impl IntoView {
 
         // Preview the move still being spoken: the last unconfirmed complete move,
         // ghosted, when it resolves to an arrow. Suppressed once the board is revealed —
-        // the mic stays on after a solve (to catch "next"), but a stray move word then must
-        // not flash a ghost on the answer or arm the countdown against a locked line.
+        // the mic stays on after a solve (to catch "next"), but a stray move word then
+        // must not flash a ghost on the answer.
         let revealed = attempt.with_untracked(session::Attempt::is_revealed);
         let ghost = (!revealed && idx < parsed.intents.len())
             .then(|| {
@@ -419,33 +353,17 @@ pub fn App() -> impl IntoView {
                 session::Heard::Draw { arrow } => Some(arrow),
                 _ => None,
             });
-
-        // Start (or reset) the silence-to-submit countdown only once a move is actually
-        // in — a committed arrow or the in-flight preview ghost — and never once the board
-        // is revealed. Before the first move the mic waits with no time limit (the
-        // think-time before a line is the user's own); once a move is in, every further
-        // phrase resets the timer and a pause past it submits. A phrase that draws nothing
-        // yet (a mid-thought "knight" awaiting its square) does not arm the timer.
-        let has_move =
-            !revealed && (attempt.with_untracked(|a| !a.arrows().is_empty()) || ghost.is_some());
         preview.set(ghost);
-        if has_move {
-            start_countdown();
-        }
     };
 
-    // Start listening, returning whether it actually started. Drives the silence
-    // countdown; the browser may refuse (no permission / no gesture), in which case the
-    // caller must not leave the control armed.
+    // Start listening, returning whether it actually started. The browser may refuse (no
+    // permission / no gesture), in which case the caller must not leave the control armed.
     let start_listening = move || {
         if recognition::start(handle_voice) {
             listening.set(true);
             // Fresh session: the streaming move counter and heard-transcript start over.
             committed.set(0);
             heard_so_far.set(String::new());
-            // No countdown yet — the mic stays on indefinitely until the first move is
-            // spoken (`handle_voice` arms the timer then). The silence-to-submit timer is
-            // for pausing *after* a line, not for the open-ended think time before it.
             true
         } else {
             false
@@ -458,8 +376,8 @@ pub fn App() -> impl IntoView {
     // user's call: turning on the mic should not, on its own, start talking). The tap is
     // still a user gesture, so it unlocks the browser's speech for a later verdict.
     let toggle_mic = move |()| {
-        // The tap is a user gesture — prime the chime's audio context now so a later
-        // verdict tone (which may fire from a gesture-less silence timer) is not swallowed.
+        // The tap is a user gesture — prime the chime's audio context now so the
+        // per-move dings and the verdict tone are not swallowed by a suspended context.
         chime::warm();
         if listening.get_untracked() {
             mic_desired.set(false);
@@ -514,12 +432,11 @@ pub fn App() -> impl IntoView {
     // mode a mic left on from the previous puzzle is turned off.)
     Effect::new(move |_| {
         puzzle.track();
-        // A fresh line: reset the streaming counters and stop any countdown a mic carried
-        // across puzzles (audio mode) was running — the new empty line has no move in yet.
+        // A fresh line: reset the streaming counters — the new empty line has no move in
+        // yet, and a mic carried across puzzles (audio mode) starts the line over.
         committed.set(0);
         heard_so_far.set(String::new());
         preview.set(None);
-        stop_countdown();
 
         let want = input_mode
             .get_untracked()
@@ -615,12 +532,10 @@ pub fn App() -> impl IntoView {
                     flipped=flipped
                     input=input_mode
                     output=output
-                    silence=silence_secs
                     on_flip=Callback::new(flip)
                     on_choose_pov=Callback::new(choose_pov)
                     on_choose_input=Callback::new(choose_input)
                     on_choose_output=Callback::new(choose_output)
-                    on_set_silence=Callback::new(set_silence)
                 />
             </div>
 
@@ -681,7 +596,6 @@ pub fn App() -> impl IntoView {
                                 can_forward=can_forward
                                 mic_supported=mic_supported
                                 listening=listening
-                                countdown=countdown
                                 on_toggle_mic=Callback::new(toggle_mic)
                                 on_undo=Callback::new(undo)
                                 on_clear=Callback::new(clear)
@@ -776,19 +690,17 @@ fn Facts(session: RwSignal<session::Session>) -> impl IntoView {
 /// is not the board — rather than in a bar above the board, which on a phone is a row
 /// of height the board would rather have. The flip is a transient per-puzzle toggle
 /// (its `pressed` state tracks the attempt); the settings menu holds the persisted
-/// preferences (point of view, and voice mode's input/output modes and silence timeout).
+/// preferences (point of view, and voice mode's input/output modes).
 #[component]
 fn BoardBar(
     #[prop(into)] pov: Signal<settings::Pov>,
     #[prop(into)] flipped: Signal<bool>,
     #[prop(into)] input: Signal<settings::Input>,
     #[prop(into)] output: Signal<settings::Output>,
-    #[prop(into)] silence: Signal<u32>,
     #[prop(into)] on_flip: Callback<()>,
     #[prop(into)] on_choose_pov: Callback<settings::Pov>,
     #[prop(into)] on_choose_input: Callback<settings::Input>,
     #[prop(into)] on_choose_output: Callback<settings::Output>,
-    #[prop(into)] on_set_silence: Callback<u32>,
 ) -> impl IntoView {
     view! {
         <div class="boardbar">
@@ -806,11 +718,9 @@ fn BoardBar(
                 pov=pov
                 input=input
                 output=output
-                silence=silence
                 on_choose_pov=on_choose_pov
                 on_choose_input=on_choose_input
                 on_choose_output=on_choose_output
-                on_set_silence=on_set_silence
             />
         </div>
     }
@@ -850,19 +760,17 @@ fn radio_group(
 
 /// The settings menu: a gear that opens a small panel of preferences.
 ///
-/// Point of view, and voice mode's two modes plus the silence timeout. Toggled open by
-/// the gear; the board and modes update live behind it as choices change, so there is
-/// nothing to confirm and no need to close on select.
+/// Point of view, and voice mode's two modes. Toggled open by the gear; the board and
+/// modes update live behind it as choices change, so there is nothing to confirm and no
+/// need to close on select.
 #[component]
 fn Settings(
     #[prop(into)] pov: Signal<settings::Pov>,
     #[prop(into)] input: Signal<settings::Input>,
     #[prop(into)] output: Signal<settings::Output>,
-    #[prop(into)] silence: Signal<u32>,
     #[prop(into)] on_choose_pov: Callback<settings::Pov>,
     #[prop(into)] on_choose_input: Callback<settings::Input>,
     #[prop(into)] on_choose_output: Callback<settings::Output>,
-    #[prop(into)] on_set_silence: Callback<u32>,
 ) -> impl IntoView {
     let open = RwSignal::new(false);
 
@@ -920,36 +828,6 @@ fn Settings(
                                 {radio_group("Point of view", pov_options(), pick_pov)}
                                 {radio_group("Input", input_options(), pick_input)}
                                 {radio_group("Output", output_options(), pick_output)}
-                                <p class="settings__heading">"Silence timeout"</p>
-                                <div class="settings__stepper">
-                                    <button
-                                        class="button button--icon"
-                                        aria-label="Shorter silence timeout"
-                                        on:click=move |_| {
-                                            on_set_silence
-                                                .run(
-                                                    silence
-                                                        .get()
-                                                        .saturating_sub(constants::SILENCE_STEP_SECS),
-                                                )
-                                        }
-                                    >
-                                        "−"
-                                    </button>
-                                    <span class="settings__stepper-value mono">
-                                        {move || format!("{}s", silence.get())}
-                                    </span>
-                                    <button
-                                        class="button button--icon"
-                                        aria-label="Longer silence timeout"
-                                        on:click=move |_| {
-                                            on_set_silence
-                                                .run(silence.get() + constants::SILENCE_STEP_SECS)
-                                        }
-                                    >
-                                        "+"
-                                    </button>
-                                </div>
                             </div>
                         }
                     })

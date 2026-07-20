@@ -392,8 +392,8 @@ pub enum Heard {
 
 // The fixed spoken replies. Named rather than inlined so the voice's copy lives in
 // one place, the way the rest of the app's constants do.
-const DIDNT_CATCH: &str = "I did not catch that.";
-const NOT_FOUND: &str = "I did not find that move. Try again.";
+const DIDNT_CATCH: &str = "Didn't catch that.";
+const NOT_FOUND: &str = "Didn't catch that.";
 const LINE_COMPLETE: &str = "That is the whole line. Say submit.";
 const ASK_PROMOTION: &str = "Promote to what?";
 const ASK_CASTLE_SIDE: &str = "Which side? Kingside or queenside.";
@@ -404,10 +404,11 @@ const ASK_CASTLE_SIDE: &str = "Which side? Kingside or queenside.";
 /// A [`diction::Command`] and an unrecognised phrase need no position. A move or a
 /// castle does — and *which* position is the subtle part: the user is some moves into
 /// a line whose opponent replies they never see, so the spoken move is resolved
-/// against the line played forward through the puzzle's **stored** defenses (see
-/// [`voice_position`]). Correct for the normal case where the user is following the
-/// intended mate; a dual that diverges from the stored line can misresolve, and then
-/// falls out as [`Heard::Say`] asking them to try again rather than a wrong arrow.
+/// against **their own drawn line** played forward (see [`voice_position`]), not the
+/// puzzle's stored solution. That is what lets a user express a move the stored mate
+/// never makes — a divergent try, or a plain wrong move — instead of being told it is
+/// illegal because the *correct* line put their pieces somewhere else. The real verdict
+/// still comes from [`solve`] on submit, against every defense.
 pub fn interpret(transcript: &str, puzzle: &puzzle::Puzzle, arrows: &[arrow::Arrow]) -> Heard {
     resolve_spoken(&diction::parse(transcript), puzzle, arrows)
 }
@@ -425,7 +426,7 @@ pub fn resolve_spoken(
         diction::Intent::Command(command) => Heard::Command(*command),
         diction::Intent::Unclear => Heard::Say(DIDNT_CATCH.to_owned()),
         diction::Intent::Move(_) | diction::Intent::Castle(_) => {
-            let Some(pos) = voice_position(puzzle, arrows.len()) else {
+            let Some(pos) = voice_position(puzzle, arrows) else {
                 return Heard::Say(LINE_COMPLETE.to_owned());
             };
             match diction::resolve(intent, &pos).expect("a move or castle resolves") {
@@ -439,23 +440,38 @@ pub fn resolve_spoken(
     }
 }
 
-/// The position a spoken move number `moves_entered + 1` is resolved against: the
-/// puzzle played forward through `moves_entered` of its stored solver moves and the
-/// representative defenses between them.
+/// The position the *next* spoken move (number `arrows.len() + 1`) is resolved against:
+/// the puzzle played forward through **the user's own drawn `arrows`**, with a
+/// representative opponent reply between each.
 ///
-/// `None` once the whole line is entered — there is no next move to resolve, which the
-/// app reports as "say submit". Uses [`mate::playback`]'s representative line (the same
-/// one a solve reveals) for the opponent replies, since the puzzle stores only the
-/// solver's arrows.
-fn voice_position(puzzle: &puzzle::Puzzle, moves_entered: usize) -> Option<shakmaty::Chess> {
-    let start = puzzle.position().ok()?;
-    if moves_entered == 0 {
-        return Some(start);
+/// Built from the user's line rather than the stored solution so a divergent or plain
+/// wrong move the user has committed to stays expressible — resolving "rook g7" after
+/// they played "rook takes f7" must see the rook on f7, wherever the stored mate went.
+/// The old version played the *stored* solver moves forward, so a line that diverged at
+/// even the first move resolved every later move against pieces that were never there.
+///
+/// The opponent replies are not part of the user's input (they commit their line
+/// blind), so a representative one is chosen: the first legal move. For a linear puzzle
+/// the solver's next move is legal against *every* reply, so this choice can never make
+/// a correct continuation unresolvable; for a wrong line it just picks some position to
+/// judge the next move from, and the true verdict comes from [`solve`] on submit against
+/// all defenses.
+///
+/// `None` once the line has mated (or otherwise ended) — there is no next move to
+/// resolve, which the app reports as "say submit".
+fn voice_position(puzzle: &puzzle::Puzzle, arrows: &[arrow::Arrow]) -> Option<shakmaty::Chess> {
+    let mut pos = puzzle.position().ok()?;
+    for &a in arrows {
+        // The user's solver move. It was legal when it was drawn (resolved against this
+        // same forward play), so it resolves here too.
+        let mv = a.resolve(&pos).ok()?;
+        pos.play_unchecked(mv);
+        // A representative opponent reply. If the game is over — the user's line mated
+        // or stalemated — there is no reply and no next move to resolve.
+        let reply = *pos.legal_moves().first()?;
+        pos.play_unchecked(reply);
     }
-    let steps = mate::playback(&start, &puzzle.solution)?;
-    // After `moves_entered` solver+defense pairs (2 plies each) it is the solver's
-    // move again — that is the position the next spoken move is resolved against.
-    step_at(&steps, 2 * moves_entered).map(|step| step.after.clone())
+    Some(pos)
 }
 
 /// "Which one? D. five or F. five." — the candidate from-squares of an ambiguous

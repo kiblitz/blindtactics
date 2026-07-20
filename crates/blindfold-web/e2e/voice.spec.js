@@ -106,22 +106,6 @@ async function spokenLine(page, solution) {
   return spoken;
 }
 
-// Force the silence timeout to a chosen number of seconds, before load. Written to the
-// same localStorage key `settings::save_silence` uses, so `load_silence` reads it at
-// mount. Registered after the puzzle-pin script (which clears storage) so it survives.
-async function setSilence(page, secs) {
-  await page.addInitScript(
-    ({ key, value }) => {
-      try {
-        window.localStorage.setItem(key, value);
-      } catch (e) {
-        // Storage unavailable (private mode); the default timeout applies instead.
-      }
-    },
-    { key: "blindfold.silence", value: String(secs) }
-  );
-}
-
 // Fire one transcript on the live fake recogniser, as Vosk would: a partialresult while
 // speaking (is_final == false) or a result once settled (is_final == true).
 async function fire(page, transcript, isFinal) {
@@ -202,17 +186,16 @@ test("a spoken line streams each move onto the board, then a voice command submi
   expect(errors).toEqual([]);
 });
 
-// The primary hands-free flow the user described: speak the whole line, then *stop* — a
-// pause past the silence threshold submits, no spoken "submit" needed. The last move is
-// held as a preview (confirm-on-next) and no recogniser final is fired here, so this also
-// pins that the silence-submit commits that held ghost before judging — otherwise the line
-// would be short its final move. The timeout is forced to its 2s minimum so the wait is short.
-test("a pause past the silence threshold submits the spoken line", async ({ page }) => {
+// There is no silence timer: a pause never submits. The whole line can be spoken and the
+// mic left to sit, and nothing is judged until an explicit "submit" (or the button). This
+// pins the removal of the old auto-submit-on-silence — a mic that submitted on its own
+// scored a loss the instant the user paused to think mid-line. Submission is the spoken
+// "submit" alone, and the last held move is committed by it (confirm-on-next).
+test("a pause never submits — only an explicit submit does", async ({ page }) => {
   const errors = collectErrors(page);
   const solutions = solutionsById();
 
   await pinAndFake(page, 0.95);
-  await setSilence(page, 2);
   await page.goto("/");
   await expect(page.locator(".board")).toBeVisible();
 
@@ -229,42 +212,21 @@ test("a pause past the silence threshold submits the spoken line", async ({ page
     await expect(steps).toHaveCount(i, { timeout: 2000 });
   }
 
-  // Then go silent. The countdown elapses, commits the held last move, submits the full
-  // line, and the mate reveals — with no further input from the user.
-  await expect(page.locator(".board--revealed")).toHaveCount(1, { timeout: 8000 });
+  // Now wait — a long pause with no further input. Nothing must submit: the board stays
+  // blind and the mic stays armed. (The old silence timer would have auto-submitted here.)
+  await page.waitForTimeout(3000);
+  await expect(page.locator(".board--revealed")).toHaveCount(0);
+  await expect(page.locator(".button--recording")).toHaveCount(1);
+
+  // Then say "submit". The final settles the held last move and fires the command, so the
+  // full line is judged and the mate reveals.
+  await fire(page, `${spoken.join(" ")} submit`, true);
+  await expect(page.locator(".board--revealed")).toHaveCount(1);
   await expect(page.locator(".verdict")).toContainText("Mate");
   await expect(page.locator(".movelist__ply")).toHaveCount(spoken.length * 2 - 1);
 
-  // The mic stays ON after the silence-submit — the pause *was* the submit, but the
-  // hands-free loop continues (the user can now say "next"). A deafen here (the old bug)
-  // would strand them with a dead mic the instant their line auto-submitted.
+  // And the mic stays on after the submit, so the hands-free loop continues.
   await expect(page.locator(".button--recording")).toHaveCount(1);
-
-  expect(errors).toEqual([]);
-});
-
-// The mic has no grace-period timeout: the silence-to-submit countdown only begins once a
-// move is actually in. So a mic armed and then left silent — the think time before the
-// first move — must NOT submit (which would score a loss on an empty line) and must stay
-// armed. This is the exact behaviour the old code got wrong: it started the countdown the
-// moment the mic armed, so a silent think would turn the mic off (and, on a non-empty line,
-// submit). Uses the 2s minimum timeout and waits comfortably past it.
-test("the mic waits without submitting until the first move is spoken", async ({ page }) => {
-  const errors = collectErrors(page);
-
-  await pinAndFake(page, 0.95);
-  await setSilence(page, 2);
-  await page.goto("/");
-  await expect(page.locator(".board")).toBeVisible();
-
-  await armMic(page);
-
-  // Stay silent well past the silence threshold — no transcript fired at all.
-  await page.waitForTimeout(3500);
-
-  // The mic is still armed and nothing has been submitted: the board stays blind.
-  await expect(page.locator(".button--recording")).toHaveCount(1);
-  await expect(page.locator(".board--revealed")).toHaveCount(0);
 
   expect(errors).toEqual([]);
 });

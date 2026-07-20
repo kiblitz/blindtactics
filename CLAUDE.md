@@ -154,13 +154,13 @@ blindfold-chess-trainer/
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 12 cases —
+- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 11 cases —
   the reveal test runs on two pinned puzzles, a `voice` spec drives a fake recogniser over
-  three cases, and a `mobile` project runs a touch spec on a phone viewport), clippy clean. Blank board,
-  drag-drawn numbered arrows each in its own colour, roster panel with real piece
-  artwork (and a speak button), a per-move promotion control, a hover highlight, a board
-  flip and a settings menu (point of view, plus voice mode's input/output modes and a
-  silence-timeout stepper), a record button for spoken input,
+  two cases, and a `mobile` project runs a touch spec on a phone viewport), clippy clean. Blank board,
+  drag-drawn numbered arrows each in its own colour, roster panel with a **toggling** speak
+  button (press again to stop the read), a per-move promotion control, a hover highlight, a
+  board flip and a settings menu (point of view, plus voice mode's input/output modes),
+  a record button for spoken input,
   submit, a **give-up** button (reveals the stored solution, scored as a loss), and a
   static reveal stepped through by hand — ◀/▶ **or** the arrow keys **or** clicking a
   move in the post-tactic **SAN move list** (Lichess-analysis style — no timer, no
@@ -315,12 +315,11 @@ its only consumer. That is the line; it is not "no strings in core".
   `localStorage`. The arithmetic is pure and native-tested; only the storage I/O needs
   a browser, and it is the only thing here that touches one.
 - `settings` — the persisted preferences, each under its own `localStorage` key so they
-  move independently. Four now: `Pov` (`ToMove` / `White` / `Black`), which side faces the
+  move independently. Three: `Pov` (`ToMove` / `White` / `Black`), which side faces the
   user, via `load_pov`/`save_pov`; `Input` (`Physical` / `Audio` — "Draw" / "Speak"), how
-  moves are entered, via `load_input`/`save_input`; `Output` (`Visual` / `Audio` — "Show" /
-  "Read aloud"), whether the roster and verdict are read aloud *automatically*, via
-  `load_output`/`save_output`; and the silence timeout (seconds) via `load_silence`/
-  `save_silence` (`clamp_silence` bounds it). All default off/visual/draw — voice is opt-in.
+  moves are entered, via `load_input`/`save_input`; and `Output` (`Visual` / `Audio` —
+  "Show" / "Read aloud"), whether the roster and verdict are read aloud *automatically*, via
+  `load_output`/`save_output`. All default off/visual/draw — voice is opt-in.
   The pure helpers are `Pov::side` / `facing` (orientation), `Input::arms_next(last_on)`
   (the per-puzzle mic policy — Draw always resets to off, Audio carries the last state) and
   `Output::speaks()` (whether to auto-read); all native-tested, only the `load_*`/`save_*`
@@ -335,16 +334,19 @@ its only consumer. That is the line; it is not "no strings in core".
   `recognition::pause` before speaking and `recognition::resume_after_speech` after — which
   **polls `speechSynthesis` to un-deafen once it goes idle, rather than trusting the
   utterance's `end` event** (Chrome fires `end` unreliably, which stranded the mic deafened
-  in read-aloud mode — "the mic didn't start"). `is_speaking()` (speaking or
-  queued) is read by the silence countdown so the timer *holds* while the app talks — a
-  roster read or a "repeat" is not the user pausing. Browser-only by nature, like `storage`.
+  in read-aloud mode — "the mic didn't start"). `is_speaking()` (speaking or queued) is what
+  makes the roster speak button a *toggle*: pressing it while a read is in progress calls
+  `silence()` to stop it rather than restarting from the top. Browser-only by nature, like
+  `storage`.
 - `chime` — the two feedback tones, a rising two-note "ding" (`correct()`) and a low buzz
   (`wrong()`), synthesized with the Web Audio API in a small `inline_js` block (like
   `recognition`'s audio graph) so there is no asset to download. Played on *every* scored
   verdict in any mode — a chime is instant feedback, not reading aloud, so the `Output` mode
   does not govern it (that gates the *spoken* verdict). Solved → ding; every scored loss
-  (miss, overshoot, give-up) → buzz; the unscored results make no sound. Browser-only, and
-  degrades to silence where there is no `AudioContext`.
+  (miss, overshoot, give-up) → buzz; the unscored results make no sound. The `correct()`
+  ding **also fires per spoken move the mic understands and draws** (`handle_voice`), so a
+  hands-free solver hears their line building without looking. Browser-only, and degrades to
+  silence where there is no `AudioContext`.
 - `recognition` — the read-aloud output's mirror: speech *input*, a thin `inline_js` wrapper
   over **Vosk** (a Kaldi recogniser compiled to WebAssembly, run fully in the browser) —
   `is_supported()` / `start(on_transcript)` / `stop()` / `pause()` / `resume()` / `warm()`, the
@@ -382,15 +384,15 @@ its only consumer. That is the line; it is not "no strings in core".
 - `database` — the committed JSONL, `include_str!`d.
 - `board`, `panel`, `line`, `app` — components. Markup and event plumbing only. `board`
   takes a `preview` prop (a ghost arrow streamed from speech as the user speaks); `panel`
-  (the roster) carries an always-present speak button; `line` swaps its drawn-arrow list
-  for the SAN `Movelist` once revealed and holds the record button + silence countdown;
-  `app` holds the window `keydown` listener that maps the arrow keys onto the reveal
-  cursor; **one per-puzzle voice effect** that resets the streaming state, arms the mic
-  from `Input::arms_next`, *then* auto-reads the roster if `Output::speaks` — arm-then-read
-  in that order so `say`'s echo-pause holds the just-armed mic off for the whole read (see
-  "Voice mode"); the verdict effect (chime always, spoken verdict gated on `Output::speaks`);
-  the settings menu (POV / input / output / silence stepper); and the record control's
-  toggle/countdown/streaming wiring.
+  (the roster) carries an always-present speak button (a toggle — press again to stop the
+  read); `line` swaps its drawn-arrow list for the SAN `Movelist` once revealed and holds
+  the record button; `app` holds the window `keydown` listener that maps the arrow keys onto
+  the reveal cursor; **one per-puzzle voice effect** that resets the streaming state, arms
+  the mic from `Input::arms_next`, *then* auto-reads the roster if `Output::speaks` —
+  arm-then-read in that order so `say`'s echo-pause holds the just-armed mic off for the
+  whole read (see "Voice mode"); the verdict effect (chime always, spoken verdict gated on
+  `Output::speaks`); the settings menu (POV / input / output); and the record control's
+  toggle/streaming wiring.
 - `pieces` — Cburnett's artwork, taken from lila (GPLv2-or-later, so compatible with our
   GPL-3.0-or-later), compiled in. See `assets/pieces/README.md`.
 - `constants` — interface policy: board side, arrow geometry, Elo constants, selection
@@ -434,12 +436,11 @@ faces" below); a fifth that giving up reveals the solution as a scored loss and 
 move list navigates by both click and arrow key (see "The analysis move list" above); a
 sixth — in a separate `mobile` Playwright *project* on a phone viewport,
 `e2e/mobile.spec.js` — that a **touch** drag draws an arrow and the page does not scroll
-at all (see "Mobile" above); and a seventh — `e2e/voice.spec.js` (three cases) — that a spoken
-line streams move-by-move onto the board and either a spoken command *or a pause past the
-silence threshold* submits it, that an armed-but-silent mic **waits without submitting** until
-the first move is spoken (the no-grace-period rule), driven through a **fake `window.Vosk`**
-stubbed in before load (see "Voice input" for why this is possible without a real recogniser in
-headless chromium).
+at all (see "Mobile" above); and a seventh — `e2e/voice.spec.js` (two cases) — that a spoken
+line streams move-by-move onto the board and a spoken "submit" command submits it, and that a
+**pause never submits** (the silence timer is gone — only an explicit "submit" or the button
+does), driven through a **fake `window.Vosk`** stubbed in before load (see "Voice input" for
+why this is possible without a real recogniser in headless chromium).
 Shared e2e utilities
 (`collectErrors`, the board/drag constants) live in `e2e/helpers.js` so the specs cannot
 drift on what a page error or a drag budget is.
@@ -675,7 +676,10 @@ touch the device. It divides cleanly into two halves with very different risk pr
 Chrome, works offline (OS voices), and needs no permission. Two ways to trigger it: the
 **`Output` mode** (`Show` / `Read aloud`, in the settings menu, `settings::load_output`, off
 by default) governs *automatic* reading, and the roster panel's **speak button** reads it on
-demand regardless of the mode — the setting is "talk on its own", not "talk at all". When
+demand regardless of the mode — the setting is "talk on its own", not "talk at all". The
+speak button is a **toggle**: pressing it while a read is in progress *stops* it
+(`speech::silence()`) rather than restarting from the top (the user's call — a restart on a
+double-press was jarring); the spoken **"skip"/"stop"** command is its voice sibling. When
 auto-reading is on (or the speak button is pressed):
 
 - The roster is read aloud — `roster::speech()`, the **third** rendering the data model was
@@ -725,11 +729,15 @@ auto-reading is on (or the speak button is pressed):
   reading aloud, so even a purely-visual drawing user gets it. The spoken sentence above is
   the detailed sibling and *is* gated. Synthesized in `chime` (Web Audio, no asset), so
   there is nothing to download and nothing that could be mistaken for the read-aloud voice.
-  **The context must be warmed on a gesture** (`chime::warm()`, called from the mic tap and
-  the submit/give-up handlers): a verdict often fires from a *gesture-less* silence timer, and
-  an `AudioContext` first touched there is created suspended — its `resume()` races the notes
-  scheduled right after, so the *first* tone plays silent. Warming on an earlier real gesture
-  removes that race (it was the bug behind "the err sound didn't play").
+  **The same `correct()` ding also plays per spoken move the mic understands and draws**
+  (in `handle_voice`, not the verdict effect) — the user's call, so a hands-free solver hears
+  each move land without looking; the drawn arrow is the visual counterpart. **The context
+  must be warmed on a gesture** (`chime::warm()`, called from the mic tap and the
+  submit/give-up handlers): a verdict can fire from a spoken "submit" rather than a click, and
+  an `AudioContext` first touched without a gesture is created suspended — its `resume()`
+  races the notes scheduled right after, so the *first* tone plays silent. The mic tap is the
+  gesture that warms it (it precedes any spoken move or submit), which removes that race (it
+  was the bug behind "the err sound didn't play").
 - The **voice is chosen, not the platform default, and this is an opinion rather than a
   setting** (the user's call: "we should just have an opinion for others to use" — no voice
   picker, no sliders). `speech::voice_score(name, uri, lang)` is *pure string logic* over
@@ -772,50 +780,39 @@ the just-armed mic is held off for the whole roster and only starts hearing on t
 let the mic come up mid-roster and hear its own read-aloud. Merging them fixed it. When the
 output does not speak there is no roster to wait for, so the armed mic is simply live at once.
 
-The **record button, per-puzzle mic policy, silence countdown, and streaming** are the app's
-other voice wiring. The record button is a **compact circular control inline with the
-Submit/Undo/Clear row** (`button--mic`, not its own labelled bar — a phone cannot spare the
-row): a 🎤 glyph when idle, a pulsing red disc showing the live silence countdown when armed.
-It toggles the mic and records the user's *intent* (`mic_desired`); the per-puzzle voice
-effect re-arms from `Input::arms_next(mic_desired)` on each new puzzle — `Draw` resets to off,
-`Speak` carries the last state.
+The **record button, per-puzzle mic policy, and streaming** are the app's other voice wiring.
+The record button is a **compact circular control inline with the Submit/Undo/Clear row**
+(`button--mic`, not its own labelled bar — a phone cannot spare the row): a 🎤 glyph when idle,
+a pulsing red disc when armed. It toggles the mic and records the user's *intent*
+(`mic_desired`); the per-puzzle voice effect re-arms from `Input::arms_next(mic_desired)` on
+each new puzzle — `Draw` resets to off, `Speak` carries the last state.
 
-**The silence countdown has no grace period: it starts only once a move is actually in.** An
-armed mic waits *indefinitely* through the open-ended think time before the first move — the
-countdown (`silence_secs`, a stepper setting, a 1-second interval) is armed by `handle_voice`
-only when a move is committed *or* held as the `preview` ghost, and every further phrase then
-resets it. This is the user's call ("the initial mic should be on indefinitely… the period
-should only start once a single move has been inputted"): the earlier code started the timer
-the instant the mic armed, so a silent think would turn the mic off (and, on a non-empty line,
-submit). Pinned by `voice.spec.js`'s "waits without submitting until the first move" case.
-While the app itself is speaking — a roster read, a "repeat" — the tick **holds** on
-`speech::is_speaking()` (the mic is deafened and the user is listening, not pausing), so a read
-never eats the timer.
+**There is no silence timer — submission is an explicit "submit" (or the button), nothing
+else.** This is the user's call ("get rid of the timer and just use submit as the submission
+mechanism"): an earlier design started a silence countdown once a move was in and auto-submitted
+on a pause. That was fragile — a pause to *think* mid-line submitted a half-drawn line and
+scored a loss, and "undo shouldn't reset the timer" was one symptom of the timer existing at
+all. So the whole countdown machinery (`silence_secs`, the interval, `start`/`stop_countdown`,
+the `Output`-menu stepper, the `SILENCE_*` constants, `settings::*_silence`) is gone. An armed
+mic simply stays live until the user says "submit" (or taps Submit); the spoken "submit" fires
+on a recogniser *final* and — via confirm-on-next — the last held `preview` move is committed by
+that same final before the line is judged, so nothing is dropped. Pinned by `voice.spec.js`'s
+two cases: one streams a line and finishes with a spoken "submit"; the other speaks a line, waits
+through a long pause asserting **nothing submits and the mic stays armed**, then says "submit".
 
-**At zero the countdown submits the assembled line and then stops — but the mic stays ON** —
-the user speaks the whole line, stops, and the pause *is* the submit (the stated primary flow:
-a pause past the threshold submits, no spoken "submit" needed). Because the last spoken move is
-held as a `preview` ghost and a silence may beat the recogniser's own final, the silence-submit
-**commits that held ghost first**, or the line would be short its final move. It submits only
-when a line is drawn and the board is not already revealed (submitting nothing, or a solved line
-again, would score a spurious loss). **Keeping the mic on is load-bearing for the hands-free
-loop**: the pause auto-submitted, but the user must still be able to say "next" (or, on a miss,
-"clear" and retry) without touching the device — deafening here (the original behaviour) left
-them with a dead mic the instant their line auto-submitted, which read as "the mic didn't turn
-back on." Only the countdown stops; `listening` stays true. After a solve the board is revealed
-and `draw` is locked, so a stray spoken word cannot extend the line, and `handle_voice`
-suppresses the preview ghost and the countdown while revealed (a spoken "next" is a command and
-still fires). The timeout does *not* touch `mic_desired`, so a silence timeout in `Speak` mode
-still re-arms next puzzle (only the user pressing the button counts as intent). Pinned by
-`voice.spec.js`'s pause-submit case (which now also asserts the mic stays recording after the
-submit).
+After a solve the board is revealed and `draw` is locked, so a stray spoken word cannot extend
+the line, and `handle_voice` suppresses the preview ghost while revealed (a spoken "next" is a
+command and still fires — the mic stays on so the hands-free loop can advance).
 
-**"repeat" re-reads the roster** (`diction::Command::Repeat`, spoken "repeat" / "again" /
-"read"): it calls the same `say_roster` the auto-read and the panel button use, which deafens
-the mic for the read and resumes it after — so the mic turns off, the roster plays, and the mic
-comes back, with the countdown held throughout by the `is_speaking` gate. Not e2e-tested
-(headless `speechSynthesis` has no voices, so the "read" is a silent no-op and `is_speaking`
-never latches).
+**"repeat" re-reads the roster and "skip"/"stop" cuts a read short.**
+`diction::Command::Repeat` (spoken "repeat" / "again" / "read") calls the same `say_roster` the
+auto-read and the panel button use, which deafens the mic for the read and resumes it after — so
+the mic turns off, the roster plays, and the mic comes back. `diction::Command::Skip` (spoken
+"skip" / "stop") calls `speech::silence()` to cancel a read in progress, the voice sibling of
+the speak button's toggle. **Caveat**: while a read is actually playing the mic is deafened (the
+echo guard), so a *spoken* "skip" cannot interrupt it mid-sentence — the speak button is the
+reliable way to cut a roster read short; "skip" fires from a live mic between reads. Not
+e2e-tested (headless `speechSynthesis` has no voices, so a "read" is a silent no-op).
 
 **The streaming multi-move parse is the heart of it.** The user is not made to speak one move
 per breath; they say a whole line ("queen f5 queen g6") and each move draws as it lands.
@@ -836,8 +833,8 @@ by the moves before it — via `session::resolve_spoken` (the per-move core of `
 Commands stream too ("queen f5 queen g6 submit"), but a command fires **only on a final** (a
 mid-utterance "submit" must not). A move that needs the user (ambiguous, needs promotion,
 illegal) stops the stream there and speaks the question on the final. There is **no spoken
-read-back** of a drawn move (repeating each move aloud was found to be noise; the arrow is the
-feedback).
+read-back** of a drawn move (repeating each move aloud was found to be noise); the arrow plus a
+short `chime::correct()` ding are the feedback.
 
 **Voice input — built.** Offline speech recognition (**Vosk**, grammar-constrained) → spoken
 move → arrow. The hard, bug-prone half, so its brain lives in pure, heavily tested modules
@@ -847,7 +844,7 @@ move → arrow. The hard, bug-prone half, so its brain lives in pure, heavily te
 
 - `parse(transcript) -> Intent` is **pure string work, no position**. `Intent` is a
   `Move` (spoken algebraic notation), a `Castle(Option<side>)`, a `Command`
-  (`Submit`/`Undo`/`Clear`/`Next`/`Repeat`/`GiveUp`), or `Unclear`. It is *fuzzy* because a
+  (`Submit`/`Undo`/`Clear`/`Next`/`Repeat`/`Skip`/`GiveUp`), or `Unclear`. It is *fuzzy* because a
   recogniser is tuned for prose: "knight"→"night", "rook"→"rock", coordinates arrive glued
   ("f6"), spaced ("f 6") or spelled ("eff six"). So it maps generously against homophone
   tables (`role_word`/`file_word`/`rank_word`/`command_word`) and recovers *structure*, not
@@ -881,12 +878,18 @@ The browser half (built):
   `Heard::Say(question)` for an ambiguity / needed promotion
   / needed castle side / miss. **Which position** is the subtle part and the reason this is
   not just `resolve`: the user is *k* moves into a line whose opponent replies they never
-  see, so `voice_position` plays the puzzle forward through the **stored solution's**
-  representative defenses (`mate::playback`, the same line a solve reveals) to the position
-  the (*k*+1)-th move is made from. Correct for the normal case of following the intended
-  mate; a dual that diverges misresolves and falls out as a spoken "try again", never a
-  wrong arrow. Pinned by `tests/session.rs`'s voice cases (resolve-to-an-arrow, command
-  pass-through, forward-play to a later move, ambiguity-asks-which, castle, end-of-line).
+  see, so `voice_position` plays the puzzle forward through **the user's own drawn arrows**
+  (each followed by a representative opponent reply — the first legal move) to the position
+  the (*k*+1)-th move is made from. **This resolves against the user's line, not the stored
+  solution** — the fix for puzzle RM5TB, where a user who played `Rxf7` (a legal divergence
+  from the stored `Qxf7`) then could not speak `Rg7`, because the old code played the *stored*
+  line forward and the rook was still on f3 (user words: "it's almost like it's using the
+  correct line to determine what moves exist which is bad"). For a linear puzzle the correct
+  next move is legal against every reply, so first-legal can never make a right move
+  unresolvable; a wrong line just gets *some* position to draw from, and the true verdict comes
+  from `judge` on submit against all defenses. Pinned by `tests/session.rs`'s voice cases
+  (resolve-to-an-arrow, command pass-through, forward-play to a later move, the RM5TB divergent
+  case, ambiguity-asks-which, castle, end-of-line).
 - `blindfold-web` `recognition` wraps **Vosk** (a Kaldi recogniser compiled to WebAssembly)
   via a small `inline_js` block that loads the library, unpacks the model, and pumps mic audio
   through it (getUserMedia → AudioContext → ScriptProcessor → `KaldiRecognizer.acceptWaveform`).
@@ -945,13 +948,15 @@ The browser half (built):
   start talking (the user's call); the roster is read only by the `Output` auto-read or the
   roster speak button. The tap is still a user gesture, so it unlocks the browser's speech for
   a later verdict. Each transcript goes to `parse_line` + the streaming commit loop (see "the
-  streaming multi-move parse" above): confirmed moves `draw`, commands run the **same action
-  closures the buttons use** — `submit`/`undo`/`clear`/`next`/`give_up` — but **only on a final**
-  (a half-said "sub…" cannot fire submit), and the last, still-forming move shows as a `preview`
-  ghost. A drawn move gets **no spoken read-back** (the arrow is the feedback); only the
-  voice's *questions and misses* (ambiguity, needed promotion, "try again") speak, through
-  `speech` **directly, not gated on the `Output` mode** — voice mode needs its own feedback,
-  and the arming tap is the required gesture. Submit still runs the same `judge`, so the
+  streaming multi-move parse" above): confirmed moves `draw` (each with a `chime::correct()`
+  ding, so a hands-free solver hears it land), commands run the **same action closures the
+  buttons use** — `submit`/`undo`/`clear`/`next`/`give_up`, plus `say_roster` for "repeat" and
+  `speech::silence()` for "skip" — but **only on a final** (a half-said "sub…" cannot fire
+  submit), and the last, still-forming move shows as a `preview` ghost. A drawn move gets **no
+  spoken read-back** (the ding and the arrow are the feedback); only the voice's *questions and
+  misses* (ambiguity, needed promotion, the short "Didn't catch that.") speak, through `speech`
+  **directly, not gated on the `Output` mode** — voice mode needs its own feedback, and the
+  arming tap is the required gesture. Submit still runs the same `judge`, so the
   assembled arrows are verified against
   *all* defenses exactly as drawn ones are. **The browser flow *is* e2e-tested, despite there
   being no real recogniser in headless chromium** — `e2e/voice.spec.js` stubs `window.Vosk`
@@ -963,9 +968,9 @@ The browser half (built):
   faked). The test then fires the exact `result`/`partialresult` events the real recogniser
   would. It streams a pinned puzzle's whole line as growing interims (asserting each move draws
   confirm-on-next), then a single final carrying "submit" (asserting the last move settles, the
-  command fires, and the mate reveals); a second case stays silent past the timeout and asserts
-  the pause alone submits; a third arms the mic and stays silent with *no move entered* and
-  asserts nothing submits and the mic stays armed (the no-grace-period rule). The fake feeds
+  command fires, and the mate reveals); a second case speaks the whole line, waits through a
+  long pause asserting **nothing submits and the mic stays armed** (there is no silence timer),
+  then says "submit" and asserts the mate reveals. The fake feeds
   strings, so the real `recognition` →
   `session::interpret` → `handle_voice` wiring runs unchanged. This is the same fake-recogniser
   trick the `speech` output test cannot use (speechSynthesis has no seam): you feed it
