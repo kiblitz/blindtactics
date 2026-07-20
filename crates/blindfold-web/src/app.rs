@@ -148,6 +148,10 @@ pub fn App() -> impl IntoView {
     });
 
     let submit = move |_| {
+        // Prime the chime's audio context while we (may) still be inside the click
+        // gesture, so the verdict's tone is not swallowed by a suspended context. A
+        // no-op when driven from the silence timer, where the mic tap already warmed it.
+        chime::warm();
         let line = attempt.with_untracked(|a| a.arrows().to_vec());
         let verdict = puzzle.with_untracked(|p| session::solve(p, &line));
         // `submit` returns the outcome only for the first scoring submission on the
@@ -160,6 +164,7 @@ pub fn App() -> impl IntoView {
     // the user's to play out) and score it as a loss, once. `give_up` returns the
     // outcome under the same first-event-only rule `submit` uses.
     let give_up = move |()| {
+        chime::warm();
         let steps = puzzle.with_untracked(session::reveal);
         let outcome = attempt.try_update(|a| a.give_up(steps)).flatten();
         score.run(outcome);
@@ -282,14 +287,20 @@ pub fn App() -> impl IntoView {
                         preview.set(None);
                     }
                     // Submit the assembled line — but only when there is one to judge and
-                    // the board is not already revealed. A silence over an empty or solved
-                    // line just turns the mic off (submitting nothing would score a loss).
+                    // the board is not already revealed (submitting nothing, or a solved
+                    // line again, would score a spurious loss).
                     let ready =
                         attempt.with_untracked(|a| !a.arrows().is_empty() && !a.is_revealed());
                     if ready {
                         submit(());
                     }
-                    deafen();
+                    // Keep the mic ON — only the countdown stops. The pause *was* the
+                    // submit, but the hands-free loop continues from here: the user speaks
+                    // "next" to advance, or (on a miss) "clear" and tries again, all without
+                    // touching the device. Deafening here (the old behaviour) stranded the
+                    // user with a dead mic the moment their line auto-submitted.
+                    leptos::logging::log!("voice: silence-submit (ready={ready}); mic stays on");
+                    stop_countdown();
                 } else {
                     countdown.set(Some(remaining));
                 }
@@ -379,8 +390,11 @@ pub fn App() -> impl IntoView {
         committed.set(idx);
 
         // Preview the move still being spoken: the last unconfirmed complete move,
-        // ghosted, when it resolves to an arrow.
-        let ghost = (idx < parsed.intents.len())
+        // ghosted, when it resolves to an arrow. Suppressed once the board is revealed —
+        // the mic stays on after a solve (to catch "next"), but a stray move word then must
+        // not flash a ghost on the answer or arm the countdown against a locked line.
+        let revealed = attempt.with_untracked(session::Attempt::is_revealed);
+        let ghost = (!revealed && idx < parsed.intents.len())
             .then(|| {
                 puzzle.with_untracked(|p| {
                     attempt.with_untracked(|a| {
@@ -394,12 +408,13 @@ pub fn App() -> impl IntoView {
             });
 
         // Start (or reset) the silence-to-submit countdown only once a move is actually
-        // in — a committed arrow or the in-flight preview ghost. Before the first move the
-        // mic waits with no time limit (the think-time before a line is the user's own);
-        // once a move is in, every further phrase resets the timer and a pause past it
-        // submits. A phrase that draws nothing yet (a mid-thought "knight" awaiting its
-        // square) does not arm the timer.
-        let has_move = attempt.with_untracked(|a| !a.arrows().is_empty()) || ghost.is_some();
+        // in — a committed arrow or the in-flight preview ghost — and never once the board
+        // is revealed. Before the first move the mic waits with no time limit (the
+        // think-time before a line is the user's own); once a move is in, every further
+        // phrase resets the timer and a pause past it submits. A phrase that draws nothing
+        // yet (a mid-thought "knight" awaiting its square) does not arm the timer.
+        let has_move =
+            !revealed && (attempt.with_untracked(|a| !a.arrows().is_empty()) || ghost.is_some());
         preview.set(ghost);
         if has_move {
             start_countdown();
@@ -430,6 +445,9 @@ pub fn App() -> impl IntoView {
     // user's call: turning on the mic should not, on its own, start talking). The tap is
     // still a user gesture, so it unlocks the browser's speech for a later verdict.
     let toggle_mic = move |()| {
+        // The tap is a user gesture — prime the chime's audio context now so a later
+        // verdict tone (which may fire from a gesture-less silence timer) is not swallowed.
+        chime::warm();
         if listening.get_untracked() {
             mic_desired.set(false);
             deafen();
@@ -441,6 +459,10 @@ pub fn App() -> impl IntoView {
                 mic_desired.set(false);
             }
         }
+        leptos::logging::log!(
+            "voice: toggle_mic -> desired={}",
+            mic_desired.get_untracked()
+        );
     };
 
     // Arrow keys walk the reveal, like a Lichess analysis board — only while revealed,
@@ -490,6 +512,8 @@ pub fn App() -> impl IntoView {
             .get_untracked()
             .arms_next(mic_desired.get_untracked());
         let now = listening.get_untracked();
+        let speaks = output.get_untracked().speaks();
+        leptos::logging::log!("voice: new puzzle -> want_mic={want} now={now} speaks={speaks}");
         if want && !now {
             start_listening();
         } else if !want && now {
@@ -498,9 +522,9 @@ pub fn App() -> impl IntoView {
 
         // Auto-read the roster if the output mode speaks. On the very first run the browser
         // may refuse for lack of a gesture; that degrades to silence until the first
-        // interaction, which is acceptable. `output` is read untracked — switching the mode
-        // must not re-read the roster (selecting a setting actuates nothing).
-        if output.get_untracked().speaks() {
+        // interaction, which is acceptable. `speaks` was read untracked above — switching
+        // the mode must not re-read the roster (selecting a setting actuates nothing).
+        if speaks {
             say_roster();
         }
     });

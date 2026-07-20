@@ -235,6 +235,11 @@ test("a pause past the silence threshold submits the spoken line", async ({ page
   await expect(page.locator(".verdict")).toContainText("Mate");
   await expect(page.locator(".movelist__ply")).toHaveCount(spoken.length * 2 - 1);
 
+  // The mic stays ON after the silence-submit — the pause *was* the submit, but the
+  // hands-free loop continues (the user can now say "next"). A deafen here (the old bug)
+  // would strand them with a dead mic the instant their line auto-submitted.
+  await expect(page.locator(".button--recording")).toHaveCount(1);
+
   expect(errors).toEqual([]);
 });
 

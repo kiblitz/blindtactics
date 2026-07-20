@@ -48,6 +48,15 @@ function bft_note(ctx, freq, start, dur, peak) {
   osc.stop(t0 + dur);
 }
 
+// Create and resume the context now, on a user gesture, so it is already *running* by
+// the time a verdict fires. A context first touched inside a timer callback (a
+// silence-submit) is created suspended and its resume() races the notes scheduled right
+// after — the first chime then plays silent. Warming on a gesture (the mic tap, a submit
+// click) removes that race.
+export function bft_chime_warm() {
+  bft_ctx();
+}
+
 export function bft_chime_correct() {
   const ctx = bft_ctx();
   if (!ctx) return;
@@ -64,10 +73,20 @@ export function bft_chime_wrong() {
 }
 "#)]
 extern "C" {
+    #[wasm_bindgen(js_name = bft_chime_warm)]
+    fn warm_js();
     #[wasm_bindgen(js_name = bft_chime_correct)]
     fn correct_js();
     #[wasm_bindgen(js_name = bft_chime_wrong)]
     fn wrong_js();
+}
+
+/// Prime the audio context on a user gesture, so the first tone is not swallowed by a
+/// still-suspended context. Call from gesture handlers that precede a verdict — the mic
+/// tap, a submit/give-up click. Safe to call repeatedly (resuming a running context is a
+/// no-op) and a no-op where there is no `AudioContext`.
+pub fn warm() {
+    warm_js();
 }
 
 /// A rising two-note "ding" — the cue for a correct answer (a solved mate).

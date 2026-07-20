@@ -716,6 +716,11 @@ auto-reading is on (or the speak button is pressed):
   reading aloud, so even a purely-visual drawing user gets it. The spoken sentence above is
   the detailed sibling and *is* gated. Synthesized in `chime` (Web Audio, no asset), so
   there is nothing to download and nothing that could be mistaken for the read-aloud voice.
+  **The context must be warmed on a gesture** (`chime::warm()`, called from the mic tap and
+  the submit/give-up handlers): a verdict often fires from a *gesture-less* silence timer, and
+  an `AudioContext` first touched there is created suspended — its `resume()` races the notes
+  scheduled right after, so the *first* tone plays silent. Warming on an earlier real gesture
+  removes that race (it was the bug behind "the err sound didn't play").
 - The **voice is chosen, not the platform default, and this is an opinion rather than a
   setting** (the user's call: "we should just have an opinion for others to use" — no voice
   picker, no sliders). `speech::voice_score(name, uri, lang)` is *pure string logic* over
@@ -778,15 +783,23 @@ While the app itself is speaking — a roster read, a "repeat" — the tick **ho
 `speech::is_speaking()` (the mic is deafened and the user is listening, not pausing), so a read
 never eats the timer.
 
-**At zero the countdown submits the assembled line, then turns the mic off** — the user speaks
-the whole line, stops, and the pause *is* the submit (the stated primary flow: a pause past the
-threshold submits, no spoken "submit" needed). Because the last spoken move is held as a
-`preview` ghost and a silence may beat the recogniser's own final, the silence-submit **commits
-that held ghost first**, or the line would be short its final move. It submits only when a line
-is drawn and the board is not already revealed (a silence over an empty or solved line just
-deafens; submitting nothing would score a loss). The timeout does *not* touch `mic_desired`, so
-a silence timeout in `Speak` mode still re-arms next puzzle (only the user pressing the button
-counts as intent). Pinned by `voice.spec.js`'s pause-submit case.
+**At zero the countdown submits the assembled line and then stops — but the mic stays ON** —
+the user speaks the whole line, stops, and the pause *is* the submit (the stated primary flow:
+a pause past the threshold submits, no spoken "submit" needed). Because the last spoken move is
+held as a `preview` ghost and a silence may beat the recogniser's own final, the silence-submit
+**commits that held ghost first**, or the line would be short its final move. It submits only
+when a line is drawn and the board is not already revealed (submitting nothing, or a solved line
+again, would score a spurious loss). **Keeping the mic on is load-bearing for the hands-free
+loop**: the pause auto-submitted, but the user must still be able to say "next" (or, on a miss,
+"clear" and retry) without touching the device — deafening here (the original behaviour) left
+them with a dead mic the instant their line auto-submitted, which read as "the mic didn't turn
+back on." Only the countdown stops; `listening` stays true. After a solve the board is revealed
+and `draw` is locked, so a stray spoken word cannot extend the line, and `handle_voice`
+suppresses the preview ghost and the countdown while revealed (a spoken "next" is a command and
+still fires). The timeout does *not* touch `mic_desired`, so a silence timeout in `Speak` mode
+still re-arms next puzzle (only the user pressing the button counts as intent). Pinned by
+`voice.spec.js`'s pause-submit case (which now also asserts the mic stays recording after the
+submit).
 
 **"repeat" re-reads the roster** (`diction::Command::Repeat`, spoken "repeat" / "again" /
 "read"): it calls the same `say_roster` the auto-read and the panel button use, which deafens
