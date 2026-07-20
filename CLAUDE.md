@@ -345,8 +345,9 @@ its only consumer. That is the line; it is not "no strings in core".
   degrades to silence where there is no `AudioContext`.
 - `recognition` — the read-aloud output's mirror: speech *input*, a thin `inline_js` wrapper
   over **Vosk** (a Kaldi recogniser compiled to WebAssembly, run fully in the browser) —
-  `is_supported()` / `start(on_transcript)` / `stop()` / `pause()` / `resume()`, the same Rust
-  interface the old `webkitSpeechRecognition` wrapper had, so the app side is unchanged. It
+  `is_supported()` / `start(on_transcript)` / `stop()` / `pause()` / `resume()` / `warm()`, the
+  same Rust interface the old `webkitSpeechRecognition` wrapper had (plus `warm`), so the app
+  side is unchanged. It
   emits `partialresult` events as the user speaks (forwarded `is_final == false`, the growing
   partial of the *current* phrase) and a `result` when a phrase settles (`is_final == true`).
   The Rust side (`diction::parse_line` + `app::handle_voice`) segments each transcript into
@@ -359,8 +360,14 @@ its only consumer. That is the line; it is not "no strings in core".
   module) and can *only* emit words in it, so that whole class of everyday-word mishears is gone —
   and the audio never leaves the machine (offline, no permission-to-Google). This is the engine
   Lichess uses. Cost: a one-time ~41 MB model + ~6 MB library, served **same-origin** from
-  `dist/vosk/` (see `fetch-vosk.sh` / the Trunk hook) and lazy-loaded only when the mic is first
-  armed; a returning visitor pays nothing (browser cache). The grammar is kept in lockstep with
+  `dist/vosk/` (see `fetch-vosk.sh` / the Trunk hook); a returning visitor pays nothing (browser
+  cache). It is **preloaded on voice intent** — `warm()` pulls the model (no mic, no gesture) the
+  moment the user switches to Speak or lands with Speak persisted, so the *first* record tap
+  activates the mic at once instead of stalling on the download; a Draw-mode or first-time
+  visitor never fetches a model they may not use. And `start` now fires **`getUserMedia` in
+  parallel with the model load**, not after it, so even an un-warmed first arm brings the mic
+  (and its permission prompt) up while the tap is still fresh rather than after the ~41 MB
+  lands. The grammar is kept in lockstep with
   `diction`'s homophone tables — `diction` still does the fuzzy mapping (number words to ranks,
   "night" to knight), this just bounds what can arrive. No logic with a right answer — *what a
   transcript means* is `session::interpret` / `resolve_spoken`; this only starts/stops/pauses the
@@ -885,9 +892,11 @@ The browser half (built):
   Firefox, Safari alike, *not* Chromium-only as `webkitSpeechRecognition` was; needs **mic
   permission** and a **gesture to start**, but **no internet** (recognition is fully local) and
   no per-vendor speech service. The catch is a one-time ~41 MB model + ~6 MB library, fetched
-  same-origin from `dist/vosk/` on first arm (see the "Vosk assets" note below). `is_supported()`
-  gates the mic control so it is simply absent where the primitives are missing. Degrades to
-  nothing like `speech` does.
+  same-origin from `dist/vosk/` (see the "Vosk assets" note below), **preloaded on voice intent**
+  via `recognition::warm()` so the first arm is not the thing that pays for it, and `start` runs
+  `getUserMedia` in parallel with the model load so the mic comes up promptly regardless.
+  `is_supported()` gates the mic control so it is simply absent where the primitives are missing.
+  Degrades to nothing like `speech` does.
 - **The grammar is why Vosk beats the browser recogniser.** `webkitSpeechRecognition` streamed
   audio to Google's general-purpose model and ignored the Web Speech grammar API, so it could not
   be told "expect chess" — it returned "rugby" for "rook b", "rookie" for "rook e", "9" for a bare

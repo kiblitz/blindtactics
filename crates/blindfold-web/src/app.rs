@@ -44,6 +44,13 @@ pub fn App() -> impl IntoView {
     // Start the browser loading its voice list now, so a good voice is chosen from the
     // very first announcement rather than after it (some browsers load voices async).
     speech::warm();
+    // If the user already prefers Speak (persisted from a prior visit), start pulling the
+    // recogniser's ~41 MB model in the background now, so their first record tap activates
+    // the mic immediately instead of waiting on the download. Only on that intent — a
+    // Draw-mode or first-time visitor never pays for a model they may not use.
+    if matches!(input_mode.get_untracked(), settings::Input::Audio) {
+        recognition::warm();
+    }
 
     // Whether the mic is actually running, and the user's *last-set* intent for it.
     // The two differ because the app pauses the running recogniser for its own speech
@@ -189,6 +196,12 @@ pub fn App() -> impl IntoView {
         if input_mode.get_untracked() != chosen {
             input_mode.set(chosen);
             settings::save_input(chosen);
+            // Switching to Speak is a strong signal the mic is about to be used, so start
+            // pulling the ~41 MB model now (no mic, no gesture) — by the first record tap it
+            // is in memory and the mic activates at once rather than stalling on the download.
+            if matches!(chosen, settings::Input::Audio) {
+                recognition::warm();
+            }
         }
     };
     let choose_output = move |chosen: settings::Output| {

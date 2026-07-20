@@ -121,14 +121,18 @@ function bft_ensure_model() {
 }
 
 async function bft_start_internal() {
-  const model = await bft_ensure_model();
-  // The mic may have been turned off while the model was still loading.
-  if (!_wantListening) return;
-
-  _stream = await navigator.mediaDevices.getUserMedia({
+  // Kick the mic request off *immediately*, in parallel with the (first-time, ~41 MB)
+  // model load — so the permission prompt / stream comes up while the record tap is still
+  // fresh rather than after the download. Awaiting the model first (the old order) made the
+  // very first arm feel dead: the mic did not activate until the whole model had landed.
+  const modelPromise = bft_ensure_model();
+  const streamPromise = navigator.mediaDevices.getUserMedia({
     video: false,
     audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
   });
+  const model = await modelPromise;
+  _stream = await streamPromise;
+  // The mic may have been turned off while these were loading; if so, drop the stream.
   if (!_wantListening) { bft_stop_audio(); return; }
 
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -199,6 +203,17 @@ export function bft_recognition_pause() {
 export function bft_recognition_resume() {
   if (_wantListening && _paused) _paused = false;
 }
+
+// Kick off the one-time library + model download *now*, without touching the mic or the
+// audio graph — no getUserMedia, no permission prompt, no gesture needed. Called when the
+// user shows voice intent (switches to Speak, or lands with Speak persisted), so the ~41 MB
+// model is already in memory by the first arm and the mic activates at once instead of
+// stalling on the download. Idempotent: the model and the in-flight promise are cached.
+export function bft_recognition_warm() {
+  bft_ensure_model().catch((err) => {
+    console.log("recognition: warm failed —", err && err.message ? err.message : err);
+  });
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = bft_recognition_supported)]
@@ -211,6 +226,8 @@ extern "C" {
     fn pause_js();
     #[wasm_bindgen(js_name = bft_recognition_resume)]
     fn resume_js();
+    #[wasm_bindgen(js_name = bft_recognition_warm)]
+    fn warm_js();
 }
 
 /// Whether this browser can do speech recognition at all — needs a microphone, an
@@ -219,6 +236,15 @@ extern "C" {
 /// does nothing.
 pub fn is_supported() -> bool {
     supported_js()
+}
+
+/// Preload the ~41 MB model in the background, so the *first* arm activates the mic at once
+/// instead of stalling on the download. Touches neither the mic nor the audio graph — no
+/// permission prompt, no gesture needed — so it is safe to call the moment the user shows
+/// voice intent (switching to Speak, or a page load with Speak persisted). Idempotent and a
+/// no-op where recognition is unsupported.
+pub fn warm() {
+    warm_js();
 }
 
 /// Start listening, forwarding each transcript to `on_transcript` as
