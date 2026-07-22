@@ -801,8 +801,12 @@ two cases: one streams a line and finishes with a spoken "submit"; the other spe
 through a long pause asserting **nothing submits and the mic stays armed**, then says "submit".
 
 After a solve the board is revealed and `draw` is locked, so a stray spoken word cannot extend
-the line, and `handle_voice` suppresses the preview ghost while revealed (a spoken "next" is a
-command and still fires — the mic stays on so the hands-free loop can advance).
+the line: `handle_voice` **skips move intents entirely while revealed** (no draw, no ding, no
+"didn't catch that" — a locked line ignores move words silently) and only runs commands. A
+spoken **"next" is gated on the board being revealed** — the user's call ("next should just be
+possible once the solution is being shown"), so a "next" (or a mishear) while still solving
+cannot skip the puzzle before they have seen the board; after a solve or give-up it advances,
+and the mic stays on so the hands-free loop can continue.
 
 **"repeat" re-reads the roster and "skip"/"stop" cuts a read short.**
 `diction::Command::Repeat` (spoken "repeat" / "again" / "read") calls the same `say_roster` the
@@ -879,17 +883,28 @@ The browser half (built):
   / needed castle side / miss. **Which position** is the subtle part and the reason this is
   not just `resolve`: the user is *k* moves into a line whose opponent replies they never
   see, so `voice_position` plays the puzzle forward through **the user's own drawn arrows**
-  (each followed by a representative opponent reply — the first legal move) to the position
-  the (*k*+1)-th move is made from. **This resolves against the user's line, not the stored
-  solution** — the fix for puzzle RM5TB, where a user who played `Rxf7` (a legal divergence
-  from the stored `Qxf7`) then could not speak `Rg7`, because the old code played the *stored*
-  line forward and the rook was still on f3 (user words: "it's almost like it's using the
-  correct line to determine what moves exist which is bad"). For a linear puzzle the correct
-  next move is legal against every reply, so first-legal can never make a right move
-  unresolvable; a wrong line just gets *some* position to draw from, and the true verdict comes
-  from `judge` on submit against all defenses. Pinned by `tests/session.rs`'s voice cases
-  (resolve-to-an-arrow, command pass-through, forward-play to a later move, the RM5TB divergent
-  case, ambiguity-asks-which, castle, end-of-line).
+  (each followed by a representative opponent reply) to the position the (*k*+1)-th move is
+  made from. Two things about it, both fixes to real reports:
+  - **It resolves against the user's line, not the stored solution** — the fix for puzzle
+    RM5TB, where a user who played `Rxf7` (a legal divergence from the stored `Qxf7`) then
+    could not speak `Rg7`, because the old code played the *stored* line forward and the rook
+    was still on f3 (user words: "it's almost like it's using the correct line to determine
+    what moves exist which is bad").
+  - **The opponent reply is chosen so it does not dead-end the line, not just first-legal**
+    (`choose_reply` / `survives_next`) — the fix for puzzle In83t (mate in 3: `Kg3, Rc1, Rd1`).
+    First-legal after `Kg3` left White *stalemated* the instant `Rc1` landed, so the position
+    for the legitimate `Rd1` never existed and the app wrongly refused it ("that's the whole
+    line"). Where the user has a *next* drawn move, the reply is picked so that move keeps the
+    opponent alive; only the last move (no lookahead) falls back to first-legal. The reply is
+    only a device for *placing* the move — correctness is never decided here; the true verdict
+    comes from `judge` on submit against all defenses.
+
+  There is **no "that's the whole line" message** — the user asked never to hear it. When the
+  drawn line has genuinely ended the game (mate/stalemate against the chosen replies) so there
+  is no next position, a spoken move is a plain miss ("Didn't catch that.") rather than a
+  "whole line" nag. Pinned by `tests/session.rs`'s voice cases (resolve-to-an-arrow, command
+  pass-through, forward-play to a later move, the RM5TB divergent case, the In83t dead-end
+  case, ambiguity-asks-which, castle, past-a-completed-mate).
 - `blindfold-web` `recognition` wraps **Vosk** (a Kaldi recogniser compiled to WebAssembly)
   via a small `inline_js` block that loads the library, unpacks the model, and pumps mic audio
   through it (getUserMedia → AudioContext → ScriptProcessor → `KaldiRecognizer.acceptWaveform`).

@@ -292,7 +292,15 @@ pub fn App() -> impl IntoView {
                         diction::Command::Submit => submit(()),
                         diction::Command::Undo => undo(()),
                         diction::Command::Clear => clear(()),
-                        diction::Command::Next => next(()),
+                        // "next" only advances once the solution is on screen — a spoken
+                        // "next" (or a mishear) while still solving must not skip the
+                        // puzzle before the user has seen the board. The user's call:
+                        // "next should just be possible once the solution is being shown."
+                        diction::Command::Next => {
+                            if attempt.with_untracked(session::Attempt::is_revealed) {
+                                next(());
+                            }
+                        }
                         diction::Command::GiveUp => give_up(()),
                         // Re-read the roster. `say_roster` deafens the mic for the read
                         // (the echo guard), so "repeat" turns the mic off, plays the
@@ -307,6 +315,13 @@ pub fn App() -> impl IntoView {
                     idx += 1;
                 }
                 intent => {
+                    // Once the board is revealed the line is locked, so a stray move word
+                    // must not draw, ding, or ask a question — silently skip it. Commands
+                    // (like "next") in the same utterance still run.
+                    if attempt.with_untracked(session::Attempt::is_revealed) {
+                        idx += 1;
+                        continue;
+                    }
                     let heard = puzzle.with_untracked(|p| {
                         attempt.with_untracked(|a| session::resolve_spoken(intent, p, a.arrows()))
                     });

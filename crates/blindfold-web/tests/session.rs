@@ -860,14 +860,39 @@ fn a_divergent_move_resolves_against_the_users_own_line_not_the_stored_one() {
 }
 
 #[test]
-fn a_move_past_the_end_of_the_line_says_so() {
-    // The whole mate-in-1 line is already entered, so there is no next move to make.
+fn a_move_past_a_completed_mate_is_a_plain_miss_not_a_whole_line_message() {
+    // The whole mate-in-1 line is already entered, so its forward play has ended the
+    // game and there is no next position. The response is a plain miss — never "that's
+    // the whole line", which the user asked never to hear.
     let puzzle = voice_puzzle(MATE_IN_1, "a1a8");
     let entered = ["a1a8".parse::<arrow::Arrow>().unwrap()];
     assert!(matches!(
         session::interpret("rook a7", &puzzle, &entered),
         session::Heard::Say(_)
     ));
+}
+
+#[test]
+fn a_next_move_resolves_even_when_first_legal_replies_would_dead_end_the_line() {
+    // Regression, puzzle In83t (mate in 3: Kg3, Rc1, Rd1, Black to move). Playing the
+    // real line, a naive "first legal opponent reply" after Kg3 leaves White stalemated
+    // the instant Rc1 lands, so the position for the legitimate Rd1 never existed and the
+    // app wrongly refused it. `voice_position` must instead pick a reply under which the
+    // next drawn move keeps the game going, so Rd1 resolves.
+    let puzzle = voice_puzzle(
+        "2R5/2P2p2/6P1/4p3/8/5k2/2r5/7K b - - 0 61",
+        "f3g3 c2c1 c1d1",
+    );
+    let entered = [
+        "f3g3".parse::<arrow::Arrow>().unwrap(),
+        "c2c1".parse::<arrow::Arrow>().unwrap(),
+    ];
+    assert_eq!(
+        session::interpret("rook d1", &puzzle, &entered),
+        session::Heard::Draw {
+            arrow: "c1d1".parse().unwrap(),
+        }
+    );
 }
 
 #[test]

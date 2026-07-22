@@ -394,7 +394,6 @@ pub enum Heard {
 // one place, the way the rest of the app's constants do.
 const DIDNT_CATCH: &str = "Didn't catch that.";
 const NOT_FOUND: &str = "Didn't catch that.";
-const LINE_COMPLETE: &str = "That is the whole line. Say submit.";
 const ASK_PROMOTION: &str = "Promote to what?";
 const ASK_CASTLE_SIDE: &str = "Which side? Kingside or queenside.";
 
@@ -426,8 +425,12 @@ pub fn resolve_spoken(
         diction::Intent::Command(command) => Heard::Command(*command),
         diction::Intent::Unclear => Heard::Say(DIDNT_CATCH.to_owned()),
         diction::Intent::Move(_) | diction::Intent::Castle(_) => {
+            // No position means the user's drawn line has already ended the game (mate or
+            // stalemate) in the forward play, so there is nothing to make the next move
+            // from. Deliberately *not* a "that's the whole line" message — the user asked
+            // never to be told that; a plain miss is all this is.
             let Some(pos) = voice_position(puzzle, arrows) else {
-                return Heard::Say(LINE_COMPLETE.to_owned());
+                return Heard::Say(DIDNT_CATCH.to_owned());
             };
             match diction::resolve(intent, &pos).expect("a move or castle resolves") {
                 diction::Resolution::Move(arrow) => Heard::Draw { arrow },
@@ -451,27 +454,64 @@ pub fn resolve_spoken(
 /// even the first move resolved every later move against pieces that were never there.
 ///
 /// The opponent replies are not part of the user's input (they commit their line
-/// blind), so a representative one is chosen: the first legal move. For a linear puzzle
-/// the solver's next move is legal against *every* reply, so this choice can never make
-/// a correct continuation unresolvable; for a wrong line it just picks some position to
-/// judge the next move from, and the true verdict comes from [`solve`] on submit against
-/// all defenses.
+/// blind), so a representative one is chosen — but *not* just the first legal move.
+/// Where the user has a *next* drawn move, the reply is picked so that move still leaves
+/// the opponent something to do, so an arbitrary reply cannot dead-end a line the user is
+/// still building. This is the In83t fix: the real solution is `Kg3, Rc1, Rd1`, but
+/// first-legal after `Kg3` stalemated White the instant `Rc1` landed, so the position for
+/// the legitimate `Rd1` never existed and the app wrongly said "that's the whole line".
 ///
-/// `None` once the line has mated (or otherwise ended) — there is no next move to
-/// resolve, which the app reports as "say submit".
+/// The reply is only a device for *placing* the next move; correctness is never decided
+/// here. A wrong line just gets some position to draw from, and the true verdict comes
+/// from [`solve`] on submit, against every defense.
+///
+/// `None` once the line has genuinely ended the game (the last drawn move mates or
+/// stalemates against the chosen replies) — there is no next move to resolve.
 fn voice_position(puzzle: &puzzle::Puzzle, arrows: &[arrow::Arrow]) -> Option<shakmaty::Chess> {
     let mut pos = puzzle.position().ok()?;
-    for &a in arrows {
+    for (i, &a) in arrows.iter().enumerate() {
         // The user's solver move. It was legal when it was drawn (resolved against this
         // same forward play), so it resolves here too.
         let mv = a.resolve(&pos).ok()?;
         pos.play_unchecked(mv);
-        // A representative opponent reply. If the game is over — the user's line mated
-        // or stalemated — there is no reply and no next move to resolve.
-        let reply = *pos.legal_moves().first()?;
+        let reply = choose_reply(&pos, arrows.get(i + 1).copied())?;
         pos.play_unchecked(reply);
     }
     Some(pos)
+}
+
+/// A representative opponent reply from `pos`, or `None` if the opponent has no legal
+/// move (the user's last move mated or stalemated them).
+///
+/// When the user has a `next` drawn move, prefer a reply under which that move is legal
+/// and still leaves the opponent a move — so the arbitrary choice of reply does not
+/// strand a line the user is midway through building (see [`voice_position`]). Falls back
+/// to the first legal reply: for the *last* drawn move there is no `next` to look ahead
+/// to, and a line with no surviving reply is genuinely stuck whatever we pick.
+fn choose_reply(pos: &shakmaty::Chess, next: Option<arrow::Arrow>) -> Option<shakmaty::Move> {
+    let replies = pos.legal_moves();
+    if let Some(next) = next {
+        if let Some(&reply) = replies
+            .iter()
+            .find(|&&reply| survives_next(pos, reply, next))
+        {
+            return Some(reply);
+        }
+    }
+    replies.first().copied()
+}
+
+/// Whether, after the opponent plays `reply`, the user's `next` drawn move is legal and
+/// still leaves the opponent a move — i.e. this reply does not dead-end the line one step
+/// on.
+fn survives_next(pos: &shakmaty::Chess, reply: shakmaty::Move, next: arrow::Arrow) -> bool {
+    let mut child = pos.clone();
+    child.play_unchecked(reply);
+    let Ok(mv) = next.resolve(&child) else {
+        return false;
+    };
+    child.play_unchecked(mv);
+    !child.legal_moves().is_empty()
 }
 
 /// "Which one? D. five or F. five." — the candidate from-squares of an ambiguous
