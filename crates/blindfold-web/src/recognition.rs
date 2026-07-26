@@ -139,6 +139,12 @@ async function bft_start_internal() {
 
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   _audioContext = new AudioCtx();
+  // The context is created "suspended" when the mic arms without a user gesture — e.g. on
+  // page load in Speak mode. A suspended context never fires `onaudioprocess`, so the mic
+  // would look armed but hear nothing. Resume now, and (if the browser refuses for lack of
+  // a gesture) again on the first user interaction, so it starts capturing the moment it
+  // is allowed rather than staying silently dead.
+  bft_resume_context();
   // Vosk resamples to the model's 16 kHz internally, so it must be told the *actual*
   // sample rate of the buffers we feed it — the context's rate, not a requested one.
   _recognizer = new model.KaldiRecognizer(_audioContext.sampleRate, GRAMMAR);
@@ -164,6 +170,22 @@ async function bft_start_internal() {
   _source.connect(_processor);
   _processor.connect(mute);
   mute.connect(_audioContext.destination);
+}
+
+// Resume the audio context if it came up suspended (armed without a user gesture). Tries
+// immediately, then hangs a one-shot listener on the first pointer/key interaction — the
+// gesture the autoplay policy wants — so a mic armed on page load in Speak mode starts
+// hearing the moment the user touches the page, not never.
+function bft_resume_context() {
+  if (!_audioContext || _audioContext.state !== "suspended") return;
+  _audioContext.resume().catch(() => {});
+  const onGesture = () => {
+    window.removeEventListener("pointerdown", onGesture);
+    window.removeEventListener("keydown", onGesture);
+    if (_audioContext) _audioContext.resume().catch(() => {});
+  };
+  window.addEventListener("pointerdown", onGesture);
+  window.addEventListener("keydown", onGesture);
 }
 
 function bft_stop_audio() {

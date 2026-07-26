@@ -33,8 +33,9 @@ pub fn App() -> impl IntoView {
 
     // Voice mode's two halves, each persisted. `input` decides whether the mic arms
     // (and how it carries across puzzles); `output` decides whether the roster and
-    // verdict are read aloud *automatically*. Both default off/visual: audio needs a
-    // user gesture to start, and a page that talks or listens on load is a surprise.
+    // verdict are read aloud *automatically*. Both default off/visual — Speak and
+    // Read-aloud are the explicit opt-ins: an *unbidden* mic or voice on load would be a
+    // surprise. Once opted in, though, Speak arms the mic on load (see `mic_desired`).
     let input_mode = RwSignal::new(settings::load_input());
     let output = RwSignal::new(settings::load_output());
     // Start the browser loading its voice list now, so a good voice is chosen from the
@@ -52,8 +53,13 @@ pub fn App() -> impl IntoView {
     // The two differ because the app pauses the running recogniser for its own speech
     // (see `speech::say`) without the user turning anything off, and because audio
     // mode re-arms the mic on a new puzzle from the last intent (see `Input::arms_next`).
+    //
+    // The intent is *seeded from the input mode*: choosing Speak is the opt-in, so a page
+    // that loads with Speak persisted wants the mic on from the start (the per-puzzle
+    // effect arms it), not off until the user taps the record button. Before this the
+    // first load always sat mic-off — `arms_next(false)` — even in Speak mode.
     let listening = RwSignal::new(false);
-    let mic_desired = RwSignal::new(false);
+    let mic_desired = RwSignal::new(matches!(input_mode.get_untracked(), settings::Input::Audio));
     // The provisional arrow streamed onto the board while the user is still speaking a
     // move — shown ghosted, replaced by a committed arrow once the move is settled.
     let preview = RwSignal::new(None::<arrow::Arrow>);

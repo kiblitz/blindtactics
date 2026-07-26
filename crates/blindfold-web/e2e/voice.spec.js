@@ -230,3 +230,32 @@ test("a pause never submits — only an explicit submit does", async ({ page }) 
 
   expect(errors).toEqual([]);
 });
+
+// The mic arms on a *fresh load* when Speak is the persisted input mode — no record tap.
+// Choosing Speak is the opt-in, so a returning user who left it on should land already
+// listening rather than mic-off until they tap. This pins the reported bug ("the first
+// time i open the page, the mic isn't on even with the input on setting"): before the fix
+// the per-session intent seeded to off, so `Input::Audio.arms_next(false)` never armed.
+test("the mic arms on load when Speak is the persisted input mode", async ({ page }) => {
+  const errors = collectErrors(page);
+
+  await pinAndFake(page, 0.95);
+  // Persist the input mode *after* pinAndFake clears storage, so it survives the load.
+  await page.addInitScript(() => {
+    try {
+      window.localStorage.setItem("blindfold.input", "audio");
+    } catch (e) {
+      // Storage unavailable (private mode) — the test below asserts the armed state, so a
+      // missing preference would surface as a plain failure rather than a false pass.
+    }
+  });
+  await page.goto("/");
+  await expect(page.locator(".board")).toBeVisible();
+
+  // Armed with no interaction: the record control shows its recording state and the
+  // recognition graph comes up on its own (the fake recogniser captures itself).
+  await expect(page.locator(".button--recording")).toHaveCount(1);
+  await page.waitForFunction(() => !!window.__rec);
+
+  expect(errors).toEqual([]);
+});

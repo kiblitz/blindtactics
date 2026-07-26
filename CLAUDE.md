@@ -154,9 +154,9 @@ blindfold-chess-trainer/
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 11 cases —
+- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 12 cases —
   the reveal test runs on two pinned puzzles, a `voice` spec drives a fake recogniser over
-  two cases, and a `mobile` project runs a touch spec on a phone viewport), clippy clean. Blank board,
+  three cases, and a `mobile` project runs a touch spec on a phone viewport), clippy clean. Blank board,
   drag-drawn numbered arrows each in its own colour, roster panel with a **toggling** speak
   button (press again to stop the read), a per-move promotion control, a hover highlight, a
   board flip and a settings menu (point of view, plus voice mode's input/output modes),
@@ -436,10 +436,12 @@ faces" below); a fifth that giving up reveals the solution as a scored loss and 
 move list navigates by both click and arrow key (see "The analysis move list" above); a
 sixth — in a separate `mobile` Playwright *project* on a phone viewport,
 `e2e/mobile.spec.js` — that a **touch** drag draws an arrow and the page does not scroll
-at all (see "Mobile" above); and a seventh — `e2e/voice.spec.js` (two cases) — that a spoken
-line streams move-by-move onto the board and a spoken "submit" command submits it, and that a
+at all (see "Mobile" above); and a seventh — `e2e/voice.spec.js` (three cases) — that a spoken
+line streams move-by-move onto the board and a spoken "submit" command submits it, that a
 **pause never submits** (the silence timer is gone — only an explicit "submit" or the button
-does), driven through a **fake `window.Vosk`** stubbed in before load (see "Voice input" for
+does), and that the **mic arms on a fresh load when Speak is the persisted input mode** (no
+record tap — the reported "mic isn't on even with the input on setting"; see "Voice mode"),
+all driven through a **fake `window.Vosk`** stubbed in before load (see "Voice input" for
 why this is possible without a real recogniser in headless chromium).
 Shared e2e utilities
 (`collectErrors`, the board/drag constants) live in `e2e/helpers.js` so the specs cannot
@@ -786,6 +788,22 @@ The record button is a **compact circular control inline with the Submit/Undo/Cl
 a pulsing red disc when armed. It toggles the mic and records the user's *intent*
 (`mic_desired`); the per-puzzle voice effect re-arms from `Input::arms_next(mic_desired)` on
 each new puzzle — `Draw` resets to off, `Speak` carries the last state.
+
+**`mic_desired` is seeded on when the persisted input mode is Speak** — `RwSignal::new(matches!
+(input_mode, Input::Audio))`, not `false`. Choosing Speak *is* the opt-in, so a returning user
+who left it on should land already listening; the per-puzzle effect then arms the very first
+puzzle from that seed. Before this the intent seeded to off, so the first load sat mic-off —
+`Input::Audio.arms_next(false)` — until a record tap, which was the reported bug ("the first
+time i open the page, the mic isn't on even with the input on setting"). Pinned by
+`voice.spec.js`'s third case (persist `blindfold.input=audio`, load, assert the mic is armed
+with no tap). **The catch the fix also had to close:** a mic armed on load has no user gesture
+behind it, so the `AudioContext` `recognition` creates comes up *suspended* and never fires
+`onaudioprocess` — armed but deaf. `recognition`'s `bft_resume_context` (called right after the
+context is built) resumes it immediately and, if the browser refuses for lack of a gesture,
+hangs a one-shot `pointerdown`/`keydown` listener that resumes on the first interaction — so a
+load-armed mic starts hearing the moment the user touches the page rather than never. (Chromium
+under `--use-fake-ui-for-media-stream` grants the mic without a prompt, and getUserMedia itself
+needs no gesture, so the graph comes up; only the context's *running* state waits on one.)
 
 **There is no silence timer — submission is an explicit "submit" (or the button), nothing
 else.** This is the user's call ("get rid of the timer and just use submit as the submission

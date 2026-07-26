@@ -83,7 +83,10 @@ pub enum Input {
     Physical,
     /// Speak the moves. The mic's last state carries across puzzles, so once the user
     /// arms it, it re-arms itself on each new puzzle until they turn it off — the
-    /// hands-free loop the project exists for.
+    /// hands-free loop the project exists for. And because choosing Speak is itself the
+    /// opt-in, a page that loads with Speak persisted arms the mic from the *start*: the
+    /// per-session intent is seeded on rather than off (see `mic_desired` in
+    /// [`crate::app`]), so the first puzzle is already listening without a record tap.
     Audio,
 }
 
