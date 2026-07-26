@@ -158,11 +158,20 @@ pub fn App() -> impl IntoView {
     });
 
     let submit = move |_| {
+        let line = attempt.with_untracked(|a| a.arrows().to_vec());
+        // A submission with nothing drawn is a no-op, mirroring the disabled Submit button.
+        // An empty line can never be a mate, so judging it would score a loss for a puzzle
+        // the user never answered. This guards the *voice* path especially: a spoken
+        // "submit" — or a stray word misheard as one ("go", "done") — bypasses the button's
+        // disabled state, and without this marks the puzzle wrong with no moves (the
+        // reported "i said no moves and i got the problem wrong").
+        if line.is_empty() {
+            return;
+        }
         // Prime the chime's audio context while we (may) still be inside the click
         // gesture, so the verdict's tone is not swallowed by a suspended context. A
         // no-op when driven from a spoken "submit", where the mic tap already warmed it.
         chime::warm();
-        let line = attempt.with_untracked(|a| a.arrows().to_vec());
         let verdict = puzzle.with_untracked(|p| session::solve(p, &line));
         // `submit` returns the outcome only for the first scoring submission on the
         // puzzle, so a miss-then-solve or a re-solve does not move the rating twice.

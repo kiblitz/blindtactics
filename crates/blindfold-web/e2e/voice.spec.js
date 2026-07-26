@@ -259,3 +259,38 @@ test("the mic arms on load when Speak is the persisted input mode", async ({ pag
 
   expect(errors).toEqual([]);
 });
+
+// A spoken "submit" with nothing drawn must not score the puzzle. The Submit *button* is
+// disabled on an empty line, but the voice command bypassed that guard: a bare "submit" —
+// or a stray word misheard as one ("go", "done") from noise — ran `judge` on zero arrows,
+// which is never a mate, and scored a loss. The reported bug: "i said no moves and i got
+// the problem wrong." An empty line is now a no-op down every path, mirroring the button.
+test("a spoken submit with nothing drawn does not submit or score", async ({ page }) => {
+  const errors = collectErrors(page);
+
+  await pinAndFake(page, 0.95);
+  await page.goto("/");
+  await expect(page.locator(".board")).toBeVisible();
+
+  const ratingBefore = await page.locator(".elo strong").textContent();
+
+  await armMic(page);
+
+  // Say only "submit", with no moves drawn beforehand.
+  await fire(page, "submit", true);
+
+  // Nothing is judged: the board stays blind, no verdict *content* appears (the `.verdict`
+  // container is always present but empty until a solve, so assert on its inner span), and
+  // — the crux — the rating is untouched (no delta shown, the number unchanged). Before the
+  // fix this scored a loss.
+  await page.waitForTimeout(500);
+  await expect(page.locator(".board--revealed")).toHaveCount(0);
+  await expect(page.locator(".verdict span")).toHaveCount(0);
+  await expect(page.locator(".elo__delta")).toHaveCount(0);
+  expect(await page.locator(".elo strong").textContent()).toBe(ratingBefore);
+
+  // And the mic stays armed, so the user can go on to actually speak their line.
+  await expect(page.locator(".button--recording")).toHaveCount(1);
+
+  expect(errors).toEqual([]);
+});

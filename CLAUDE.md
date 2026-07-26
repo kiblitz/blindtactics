@@ -154,9 +154,9 @@ blindfold-chess-trainer/
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 13 cases —
+- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 14 cases —
   the reveal test runs on two pinned puzzles, a `voice` spec drives a fake recogniser over
-  three cases, a screen-wake-lock test drives a faked `navigator.wakeLock`, and a `mobile`
+  four cases, a screen-wake-lock test drives a faked `navigator.wakeLock`, and a `mobile`
   project runs a touch spec on a phone viewport), clippy clean. Blank board,
   drag-drawn numbered arrows each in its own colour, roster panel with a **toggling** speak
   button (press again to stop the read), a per-move promotion control, a hover highlight, a
@@ -455,11 +455,13 @@ sixth that the app **holds a screen wake lock** on mount and re-acquires it on r
 foreground, driven against a **faked `navigator.wakeLock`** (see the `wake` module above); a
 seventh — in a separate `mobile` Playwright *project* on a phone viewport,
 `e2e/mobile.spec.js` — that a **touch** drag draws an arrow and the page does not scroll
-at all (see "Mobile" above); and an eighth — `e2e/voice.spec.js` (three cases) — that a spoken
+at all (see "Mobile" above); and an eighth — `e2e/voice.spec.js` (four cases) — that a spoken
 line streams move-by-move onto the board and a spoken "submit" command submits it, that a
 **pause never submits** (the silence timer is gone — only an explicit "submit" or the button
-does), and that the **mic arms on a fresh load when Speak is the persisted input mode** (no
+does), that the **mic arms on a fresh load when Speak is the persisted input mode** (no
 record tap — the reported "mic isn't on even with the input on setting"; see "Voice mode"),
+and that a **spoken "submit" with nothing drawn is a no-op** (does not score — the reported "i
+said no moves and i got the problem wrong"; see "Voice mode"),
 all driven through a **fake `window.Vosk`** stubbed in before load (see "Voice input" for
 why this is possible without a real recogniser in headless chromium).
 Shared e2e utilities
@@ -836,6 +838,19 @@ on a recogniser *final* and — via confirm-on-next — the last held `preview` 
 that same final before the line is judged, so nothing is dropped. Pinned by `voice.spec.js`'s
 two cases: one streams a line and finishes with a spoken "submit"; the other speaks a line, waits
 through a long pause asserting **nothing submits and the mic stays armed**, then says "submit".
+
+**A submit with nothing drawn is a no-op, down every path.** The Submit *button* is disabled on
+an empty line (`editing_disabled = drawn.is_empty()`), but the voice `Command::Submit` bypassed
+that — a bare spoken "submit", *or a stray word misheard as one* (`command_word` maps "go" /
+"done" / "enter" to Submit, and Vosk can emit those from noise), ran `judge` on zero arrows,
+which is a `Refuted` → scored a *loss* for a puzzle the user never answered ("i said no moves and
+i got the problem wrong"). The guard lives in the shared `submit` closure (`if line.is_empty() {
+return; }`), not the voice arm, so *every* caller inherits it and the button's disabled state and
+the voice path cannot diverge. Pinned by `voice.spec.js`'s fourth case (arm the mic, say only
+"submit", assert no verdict content, no board reveal, and the rating unchanged). Note the assert
+is on `.verdict span`, not `.verdict`: the `<p class="verdict">` container is *always* rendered
+and only holds a child span once there is a solve, so a count on the container would be a false
+pass — the bug produced a `verdict--no` span inside an ever-present `.verdict`.
 
 After a solve the board is revealed and `draw` is locked, so a stray spoken word cannot extend
 the line: `handle_voice` **skips move intents entirely while revealed** (no draw, no ding, no
