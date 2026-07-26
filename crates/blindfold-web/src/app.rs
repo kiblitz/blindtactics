@@ -11,6 +11,7 @@ use crate::session;
 use crate::settings;
 use crate::speech;
 use crate::square;
+use crate::wake;
 use blindfold_core::arrow;
 use blindfold_core::diction;
 use blindfold_core::roster;
@@ -38,6 +39,11 @@ pub fn App() -> impl IntoView {
     // surprise. Once opted in, though, Speak arms the mic on load (see `mic_desired`).
     let input_mode = RwSignal::new(settings::load_input());
     let output = RwSignal::new(settings::load_output());
+    // Keep a phone's screen from dimming and locking while the app is open — a trainer
+    // used hands-free in voice mode goes untouched for minutes at a time, so the idle
+    // timer would sleep it mid-puzzle. Held for the whole session and re-acquired on its
+    // own when the page returns to the foreground (see `wake`); a no-op where unsupported.
+    wake::request();
     // Start the browser loading its voice list now, so a good voice is chosen from the
     // very first announcement rather than after it (some browsers load voices async).
     speech::warm();

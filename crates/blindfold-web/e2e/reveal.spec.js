@@ -463,3 +463,62 @@ test("giving up reveals the solution, and the move list navigates by click and a
 
   expect(errors).toEqual([]);
 });
+
+// The screen wake lock keeps a phone from sleeping during a hands-free session. Whether a
+// real lock is granted is environment-dependent (headless has no physical screen), so this
+// fakes `navigator.wakeLock` before load — the same deterministic-stub trick voice.spec.js
+// uses for Vosk — and asserts the wiring: the app requests a "screen" lock on mount, and
+// re-acquires when the page returns to the foreground (the browser drops the lock on hide
+// and never restores it, so without the visibilitychange re-acquire the screen would sleep
+// after the first tab switch).
+test("the app holds a screen wake lock and re-acquires it on return to foreground", async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+
+  await page.addInitScript(() => {
+    window.__wakeRequests = [];
+    const fake = {
+      request: async (type) => {
+        window.__wakeRequests.push(type);
+        const listeners = {};
+        // The browser releases the lock when the page hides; expose a way to fire that so
+        // the test can simulate a hide → the module's handle clears and re-acquires next.
+        window.__wakeReleaseLast = () => listeners.release && listeners.release();
+        return {
+          addEventListener: (ev, cb) => {
+            listeners[ev] = cb;
+          },
+          release: async () => window.__wakeReleaseLast(),
+        };
+      },
+    };
+    // WebIDL attributes on navigator are configurable, so this replaces the real one (or
+    // adds it where the browser has none); the guard keeps a locked-down env from throwing.
+    try {
+      Object.defineProperty(navigator, "wakeLock", { value: fake, configurable: true });
+    } catch (e) {
+      // Cannot override — the assertions below then surface it as a plain failure.
+    }
+  });
+
+  await page.goto("/");
+  await expect(page.locator(".board")).toBeVisible();
+
+  // Requested once on mount.
+  await expect
+    .poll(() => page.evaluate(() => window.__wakeRequests || []))
+    .toEqual(["screen"]);
+
+  // Simulate the browser dropping the lock on hide, then a return to the foreground: the
+  // visibilitychange (while visible) must re-acquire, so a second "screen" request lands.
+  await page.evaluate(() => {
+    window.__wakeReleaseLast();
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect
+    .poll(() => page.evaluate(() => window.__wakeRequests || []))
+    .toEqual(["screen", "screen"]);
+
+  expect(errors).toEqual([]);
+});

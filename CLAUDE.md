@@ -154,9 +154,10 @@ blindfold-chess-trainer/
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 12 cases —
+- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 13 cases —
   the reveal test runs on two pinned puzzles, a `voice` spec drives a fake recogniser over
-  three cases, and a `mobile` project runs a touch spec on a phone viewport), clippy clean. Blank board,
+  three cases, a screen-wake-lock test drives a faked `navigator.wakeLock`, and a `mobile`
+  project runs a touch spec on a phone viewport), clippy clean. Blank board,
   drag-drawn numbered arrows each in its own colour, roster panel with a **toggling** speak
   button (press again to stop the read), a per-move promotion control, a hover highlight, a
   board flip and a settings menu (point of view, plus voice mode's input/output modes),
@@ -381,6 +382,22 @@ its only consumer. That is the line; it is not "no strings in core".
   `rating` and `settings` so the fallible steps to reach it — and the `get_item`/`set_item`
   that can itself fail — are not open-coded twice. The `window().local_storage()` handle is
   private to the module; callers deal only in a key and an `Option<String>`.
+- `wake` — the **screen wake lock**, a thin `inline_js` wrapper over the [Screen Wake Lock
+  API][wakelock] (`request()`). A trainer used hands-free in voice mode goes untouched for
+  minutes, so a phone's idle timer would dim and lock the screen mid-puzzle; `app` calls
+  `wake::request()` once at mount and the lock is held for the whole session. Two browser
+  facts the JS handles so the caller only asks once: a wake lock is **auto-released when the
+  page is hidden** and never restored, so the module **re-acquires on `visibilitychange`**
+  (else the screen sleeps after the first tab switch); and it needs a **secure context and a
+  visible document**, so the re-acquire is gated on `visibilityState === "visible"`. No
+  logic with a right answer, so no native test — the wiring (requests on mount, re-acquires
+  on foreground) is pinned by `reveal.spec.js` against a **faked `navigator.wakeLock`** (the
+  same stub trick `voice.spec.js` uses for Vosk, since headless has no physical screen to
+  lock). Degrades to nothing (`navigator.wakeLock` absent → a harmless no-op), like `speech`
+  and `recognition`. The trigger is **"always while open"** (the user's call over a per-mode
+  or opt-in switch), so there is deliberately no `release`/setting — the seam is one call.
+
+  [wakelock]: https://developer.mozilla.org/en-US/docs/Web/API/Screen_Wake_Lock_API
 - `database` — the committed JSONL, `include_str!`d.
 - `board`, `panel`, `line`, `app` — components. Markup and event plumbing only. `board`
   takes a `preview` prop (a ghost arrow streamed from speech as the user speaks); `panel`
@@ -434,9 +451,11 @@ below); a fourth that the settings POV and the flip button actually re-orient th
 and that the POV persists across a reload while the flip does not (see "Which way the board
 faces" below); a fifth that giving up reveals the solution as a scored loss and the SAN
 move list navigates by both click and arrow key (see "The analysis move list" above); a
-sixth — in a separate `mobile` Playwright *project* on a phone viewport,
+sixth that the app **holds a screen wake lock** on mount and re-acquires it on return to the
+foreground, driven against a **faked `navigator.wakeLock`** (see the `wake` module above); a
+seventh — in a separate `mobile` Playwright *project* on a phone viewport,
 `e2e/mobile.spec.js` — that a **touch** drag draws an arrow and the page does not scroll
-at all (see "Mobile" above); and a seventh — `e2e/voice.spec.js` (three cases) — that a spoken
+at all (see "Mobile" above); and an eighth — `e2e/voice.spec.js` (three cases) — that a spoken
 line streams move-by-move onto the board and a spoken "submit" command submits it, that a
 **pause never submits** (the silence timer is gone — only an explicit "submit" or the button
 does), and that the **mic arms on a fresh load when Speak is the persisted input mode** (no

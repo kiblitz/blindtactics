@@ -27,3 +27,4 @@ pub mod settings;
 pub mod speech;
 pub mod square;
 pub mod storage;
+pub mod wake;
