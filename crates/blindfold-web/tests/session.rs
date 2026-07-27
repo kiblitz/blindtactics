@@ -179,6 +179,43 @@ fn an_overshoot_scores_a_loss_and_does_not_reveal() {
     assert_eq!(a.ply(), 0);
 }
 
+/// Editing the line after a wrong verdict clears the stale "incorrect" marking. A
+/// refuted or overshot submission does not reveal the board, so the line stays
+/// editable — and a user who draws a move, submits it wrong, then undoes back to an
+/// empty line must not still be shown "incorrect". (Reported: "i played a move, undid
+/// (now at 0 moves) and was marked incorrect.") The `scored` latch is deliberately
+/// left set, so resubmitting cannot re-score the puzzle.
+#[test]
+fn editing_the_line_clears_a_stale_wrong_verdict() {
+    for edit in ["undo", "clear", "draw"] {
+        let mut a = session::Attempt::new();
+        a.draw(arrow(shakmaty::Square::A1, shakmaty::Square::A2));
+        assert_eq!(
+            a.submit(session::Solve::Overshot { mate_at: 1 }),
+            Some(rating::Outcome::Failed)
+        );
+        assert!(a.solve().is_some(), "the wrong submission shows a verdict");
+
+        match edit {
+            "undo" => a.undo(),
+            "clear" => a.clear(),
+            "draw" => a.draw(arrow(shakmaty::Square::B1, shakmaty::Square::B2)),
+            _ => unreachable!(),
+        }
+        assert!(
+            a.solve().is_none(),
+            "editing the line ({edit}) must dismiss the previous verdict"
+        );
+
+        // The miss still counts: resubmitting cannot re-score.
+        assert_eq!(
+            a.submit(session::Solve::Overshot { mate_at: 1 }),
+            None,
+            "the scored latch survives an edit, so a resubmit does not re-score"
+        );
+    }
+}
+
 /// A pawn promotion left at the per-move control's "no promotion" default is an
 /// incomplete entry, not a wrong answer. It must not score — and crucially must not
 /// latch `scored` — so a user who forgot to pick a piece can fix it and still get

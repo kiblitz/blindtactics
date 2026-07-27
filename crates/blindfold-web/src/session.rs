@@ -617,27 +617,49 @@ impl Attempt {
     /// Append one arrow to the line. Ignored once the board is revealed: it is
     /// locked, and a stray draw must not extend a line that has already been judged
     /// (or a puzzle that has been given up on).
+    ///
+    /// Dismisses any standing verdict: a non-revealing verdict (a refutation or an
+    /// overshoot) leaves the line editable, so editing it makes the old verdict stale.
+    /// See [`dismiss_verdict`](Attempt::dismiss_verdict).
     pub fn draw(&mut self, arrow: arrow::Arrow) {
         if self.is_revealed() {
             return;
         }
+        self.dismiss_verdict();
         self.arrows.push(arrow);
     }
 
     /// Drop the last arrow. Ignored once revealed, for the same reason as [`draw`].
+    /// Dismisses any standing verdict — see [`draw`](Attempt::draw).
     pub fn undo(&mut self) {
         if self.is_revealed() {
             return;
         }
+        self.dismiss_verdict();
         self.arrows.pop();
     }
 
-    /// Drop every arrow. Ignored once revealed.
+    /// Drop every arrow. Ignored once revealed. Dismisses any standing verdict — see
+    /// [`draw`](Attempt::draw).
     pub fn clear(&mut self) {
         if self.is_revealed() {
             return;
         }
+        self.dismiss_verdict();
         self.arrows.clear();
+    }
+
+    /// Drop a standing non-revealing verdict so an edited line no longer shows a stale
+    /// "incorrect". Only reachable when the board is not revealed (its callers all
+    /// early-return in that case), so `self.solve` here is either `None` or a
+    /// [`Refuted`](Solve::Refuted)/[`Overshot`](Solve::Overshot)/[`Incomplete`](
+    /// Solve::Incomplete)/[`Unjudged`](Solve::Unjudged) that the edit invalidates.
+    ///
+    /// `scored` is deliberately *not* reset: the miss already counted, and re-scoring a
+    /// resubmit of the same puzzle is exactly what the latch prevents.
+    fn dismiss_verdict(&mut self) {
+        self.solve = None;
+        self.ply = 0;
     }
 
     /// Set (or clear) the promotion piece on the arrow at `index`. A no-op if
