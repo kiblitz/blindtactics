@@ -46,7 +46,7 @@ async function assertBoardFitsViewport(page, board) {
 // a depth or an order.
 function solutionsById() {
   const byId = new Map();
-  for (const depth of [1, 2, 3, 4]) {
+  for (const depth of [1, 2, 3, 4, 5]) {
     const file = path.join(__dirname, "..", "..", "..", "database", `mate_in_${depth}.jsonl`);
     for (const row of fs.readFileSync(file, "utf8").split("\n")) {
       if (!row.trim()) continue;
@@ -196,19 +196,21 @@ test("an arrow's head is painted the same colour as its shaft", async ({ page })
 
 // The reveal is exercised on pinned puzzles rather than a random one, so a CI
 // retry re-runs the identical case (see `pinPuzzle`). The seeds are chosen against
-// the committed database's rating order (fresh rating 1200) to cover a spread
-// deliberately: a mate-in-3 whose line includes a real promotion, so the picker's
-// piece-choice path is walked, and a mate-in-4 whose first move *originates* on the
-// lowest rank — the below-the-fold endpoint the viewport fix exists to keep
-// on-screen. The test still reads whichever puzzle is on screen and looks up *its*
-// solution, so it cannot silently drift from what the seed selects.
+// the committed database's rating order (fresh rating 1200, so the picker's pool is
+// the 24 puzzles nearest 1200) to cover a spread deliberately: a mate-in-4 whose line
+// includes a real promotion, so the picker's piece-choice path is walked, and a
+// mate-in-3 whose first move *originates* on the lowest rank — the below-the-fold
+// endpoint the viewport fix exists to keep on-screen. The test still reads whichever
+// puzzle is on screen and looks up *its* solution, so it cannot silently drift from
+// what the seed selects. (When the database is regenerated these seeds move — recompute
+// them from the 1200-nearest pool; the assertions below fail loudly if they go stale.)
 //
 // `expectSuffix` guards the promotion coverage against database regeneration: were
-// seed 0.05 to stop selecting a promotion puzzle, the suffix→piece path would quietly
+// this seed to stop selecting a promotion puzzle, the suffix→piece path would quietly
 // stop being tested with a green run, so the case asserts its solution really promotes.
 const REVEAL_CASES = [
-  { seed: 0.05, note: "mate in 3, with a promotion", expectSuffix: true },
-  { seed: 0.8, note: "mate in 4, first move from the lowest rank", expectSuffix: false },
+  { seed: 0.19, note: "mate in 4, with a promotion", expectSuffix: true },
+  { seed: 0.73, note: "mate in 3, first move from the lowest rank", expectSuffix: false },
 ];
 
 for (const { seed, note, expectSuffix } of REVEAL_CASES) {

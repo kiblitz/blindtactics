@@ -37,7 +37,8 @@ pub struct Rejected {
     pub mislabelled: usize,
     /// More squares than [`constants::MAX_ROSTER_SQUARES`] — unusable blindfold.
     pub too_heavy: usize,
-    /// Halfmove clock at or past [`constants::MAX_HALFMOVE_CLOCK`].
+    /// Halfmove clock at or past [`constants::max_halfmove_clock`] for its depth — high
+    /// enough that the defender could claim a 50-move draw our solver cannot see.
     pub drawish: usize,
 }
 
@@ -150,7 +151,7 @@ fn candidate(row: &lichess::Row<'_>, depth: usize) -> Result<puzzle::Puzzle, Rej
         return Err(Reject::TooHeavy);
     }
 
-    if position::halfmove_clock(&position) >= constants::MAX_HALFMOVE_CLOCK {
+    if position::halfmove_clock(&position) >= constants::max_halfmove_clock(depth) {
         return Err(Reject::Drawish);
     }
 

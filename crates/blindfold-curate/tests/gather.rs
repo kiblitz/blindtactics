@@ -103,26 +103,39 @@ fn row_with_clock(row_clock: u32) -> String {
     LIGHT_MATE_IN_1.replace("w - - 1 58", &format!("w - - {row_clock} 58"))
 }
 
+/// The gate is depth-aware: a deeper mate lets the defender reach a higher clock on
+/// their last turn, so it needs a stricter threshold. This one pins the exact values.
+#[test]
+fn the_halfmove_gate_tightens_with_depth() {
+    assert_eq!(constants::max_halfmove_clock(1), 100);
+    assert_eq!(constants::max_halfmove_clock(2), 98);
+    assert_eq!(constants::max_halfmove_clock(3), 96);
+    assert_eq!(constants::max_halfmove_clock(4), 94);
+    assert_eq!(constants::max_halfmove_clock(5), 92);
+}
+
 /// shakmaty has no 50-move rule, so a high clock lets the defender claim a draw our
 /// solver cannot see. Rejecting it here keeps `judge` a pure function of the four
-/// things the roster carries.
+/// things the roster carries. The fixture is a mate-in-1, so its threshold is
+/// `max_halfmove_clock(1)` = 100.
 #[test]
 fn rows_whose_halfmove_clock_allows_a_claimable_draw_are_rejected() {
     // Shown clock lands exactly on the threshold.
-    let pool = pool_of(&[&row_with_clock(constants::MAX_HALFMOVE_CLOCK - 1)]);
+    let pool = pool_of(&[&row_with_clock(constants::max_halfmove_clock(1) - 1)]);
     assert_eq!(pool.rejected.drawish, 1);
     assert!(ids(&pool, 1).is_empty());
 }
 
-/// The boundary is exclusive: a shown clock of 93 is safe, 94 is not. CLAUDE.md
-/// derives why it is 94 and not `100 - 7` — the mating ply is the solver's, and mate
-/// ends the game — and this is what stops that derivation being quietly rounded off.
+/// The boundary is exclusive: for this mate-in-1 fixture a shown clock of 99 is safe,
+/// 100 is not. CLAUDE.md derives why the threshold is `102 - 2·depth` and not
+/// `100 - plies` — the mating ply is the solver's, and mate ends the game — and this is
+/// what stops that derivation being quietly rounded off.
 #[test]
 fn the_halfmove_boundary_is_exactly_where_it_is_documented() {
-    let pool = pool_of(&[&row_with_clock(constants::MAX_HALFMOVE_CLOCK - 2)]);
+    let pool = pool_of(&[&row_with_clock(constants::max_halfmove_clock(1) - 2)]);
     assert_eq!(
         pool.rejected.drawish, 0,
-        "a shown clock of 93 is still safe"
+        "a shown clock of 99 is still safe at depth 1"
     );
     assert_eq!(ids(&pool, 1), ["00C7m"]);
 }
@@ -133,10 +146,10 @@ fn the_halfmove_boundary_is_exactly_where_it_is_documented() {
 /// gate read `row.fen` and the threshold were shifted by one to compensate.
 #[test]
 fn the_halfmove_gate_measures_the_position_after_the_setup_move() {
-    // Row clock 93: safe by the row, over the line once the quiet setup move ticks it.
-    let row = row_with_clock(constants::MAX_HALFMOVE_CLOCK - 1);
+    // Row clock 99: safe by the row, over the depth-1 line once the quiet setup move ticks it.
+    let row = row_with_clock(constants::max_halfmove_clock(1) - 1);
     assert!(
-        row.contains(&format!("- {} 58", constants::MAX_HALFMOVE_CLOCK - 1)),
+        row.contains(&format!("- {} 58", constants::max_halfmove_clock(1) - 1)),
         "the row itself is below the threshold"
     );
     let pool = pool_of(&[&row]);
@@ -200,7 +213,7 @@ fn pool_with(counts: [usize; constants::DEPTHS.len()]) -> gather::Pool {
 #[test]
 fn a_pool_is_full_only_when_every_depth_has_its_candidates() {
     let n = constants::CANDIDATES_PER_DEPTH;
-    assert!(pool_with([n, n, n, n]).is_full());
+    assert!(pool_with([n, n, n, n, n]).is_full());
 }
 
 /// The `all` vs `any` distinction, which is the one that matters and the one nothing
@@ -211,15 +224,15 @@ fn a_pool_is_full_only_when_every_depth_has_its_candidates() {
 fn one_depth_short_of_full_is_not_a_full_pool() {
     let n = constants::CANDIDATES_PER_DEPTH;
     assert!(
-        !pool_with([n, n, n, n - 1]).is_full(),
-        "mate-in-4 one candidate short must keep the scan going"
+        !pool_with([n, n, n, n, n - 1]).is_full(),
+        "mate-in-5 one candidate short must keep the scan going"
     );
     assert!(
-        !pool_with([n, 0, 0, 0]).is_full(),
+        !pool_with([n, 0, 0, 0, 0]).is_full(),
         "only the first tier full"
     );
     assert!(
-        !pool_with([0, 0, 0, 0]).is_full(),
+        !pool_with([0, 0, 0, 0, 0]).is_full(),
         "an empty pool is not full"
     );
 }
@@ -227,7 +240,7 @@ fn one_depth_short_of_full_is_not_a_full_pool() {
 /// `candidates` is what `is_full` and the progress line both read.
 #[test]
 fn candidates_counts_what_a_depth_holds() {
-    let pool = pool_with([3, 0, 1, 0]);
+    let pool = pool_with([3, 0, 1, 0, 0]);
     assert_eq!(pool.candidates(1), 3);
     assert_eq!(pool.candidates(2), 0);
     assert_eq!(pool.candidates(3), 1);

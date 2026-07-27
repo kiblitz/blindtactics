@@ -77,13 +77,20 @@ fn each_file_holds_only_the_depth_it_names() {
     }
 }
 
+/// Every tier lands in `[MIN_PER_DEPTH, PER_DEPTH]`. Not an exact count, because the
+/// tiers are not uniform: the abundant depths (1-3) hit the `PER_DEPTH` ceiling, while the
+/// scarce ones ship their whole verified pool — 271 mate-in-4, 56 mate-in-5 — which is
+/// fewer. The floor catches a collapse (a gate bug, a truncated dump) without pinning the
+/// scarce tiers to a dump-specific magic number.
 #[test]
-fn every_depth_has_a_full_set() {
+fn every_depth_is_within_its_target_band() {
     for depth in constants::DEPTHS {
-        assert_eq!(
-            load(depth).len(),
-            constants::PER_DEPTH,
-            "mate_in_{depth}.jsonl"
+        let n = load(depth).len();
+        assert!(
+            (constants::MIN_PER_DEPTH..=constants::PER_DEPTH).contains(&n),
+            "mate_in_{depth}.jsonl has {n} puzzles, want {}..={}",
+            constants::MIN_PER_DEPTH,
+            constants::PER_DEPTH
         );
     }
 }
@@ -151,7 +158,7 @@ fn no_puzzle_lets_the_defender_claim_a_draw() {
             let position = p.position().expect("verified elsewhere");
             let clock = position::halfmove_clock(&position);
             assert!(
-                clock < constants::MAX_HALFMOVE_CLOCK,
+                clock < constants::max_halfmove_clock(depth),
                 "mate_in_{depth}.jsonl: puzzle {} has halfmove clock {clock}",
                 p.id
             );

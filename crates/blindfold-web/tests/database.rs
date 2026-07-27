@@ -25,17 +25,35 @@ fn every_depth_the_curator_writes_is_embedded() {
         (1..=blindfold_core::constants::MAX_DEPTH).collect::<Vec<_>>(),
         "a depth is missing from the include_str! list"
     );
-    // Every tier the same size: a file quietly included twice, or one included in
-    // place of another, shows up here as a lopsided count.
-    let counts: Vec<usize> = by_depth.values().copied().collect();
-    assert!(
-        counts.iter().all(|n| *n == counts[0]),
-        "tiers are uneven: {by_depth:?} — is a file included twice?"
-    );
-    assert_eq!(
-        puzzles.len(),
-        counts[0] * blindfold_core::constants::MAX_DEPTH
-    );
+    // The tiers are deliberately *not* the same size — the abundant depths hit the
+    // curator's ceiling while the scarce ones (mate-in-4, -5) ship their whole verified
+    // pool — so a lopsided count is expected, not a bug. Instead pin each depth's embedded
+    // count to the committed file on disk: a file included twice, or one swapped for
+    // another, makes the embedded count disagree with what the file actually holds.
+    for (&depth, &embedded) in &by_depth {
+        let on_disk = committed_count(depth);
+        assert_eq!(
+            embedded, on_disk,
+            "mate_in_{depth}: embedded {embedded} != file {on_disk} — a bad include_str! list"
+        );
+    }
+    assert_eq!(puzzles.len(), by_depth.values().sum::<usize>());
+}
+
+/// How many puzzles the committed `mate_in_{depth}.jsonl` holds, read from disk. Resolved
+/// from `CARGO_MANIFEST_DIR` (this crate is two levels under the workspace root, like the
+/// `include_str!` paths in `database.rs` are three under `src/`).
+fn committed_count(depth: usize) -> usize {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("database")
+        .join(format!("mate_in_{depth}.jsonl"));
+    let contents =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    blindfold_core::puzzle::of_jsonl(&contents)
+        .expect("committed jsonl parses")
+        .len()
 }
 
 /// `database::load` concatenates the four `mate_in_N.jsonl` files in ascending

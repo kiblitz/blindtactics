@@ -53,7 +53,7 @@ async function pinAndFake(page, seed) {
 // Every committed puzzle, keyed by id → solution — the same JSONL the app compiles in.
 function solutionsById() {
   const byId = new Map();
-  for (const depth of [1, 2, 3, 4]) {
+  for (const depth of [1, 2, 3, 4, 5]) {
     const file = path.join(__dirname, "..", "..", "..", "database", `mate_in_${depth}.jsonl`);
     for (const row of fs.readFileSync(file, "utf8").split("\n")) {
       if (!row.trim()) continue;
@@ -134,26 +134,27 @@ function hasPromotion(uci) {
   return Boolean(uci[4]);
 }
 
-// Seed 0.95 selects a mate-in-3 whose line promotes (f3g2, g2g1=Q, g1g3): a single
+// Seed 0.52 selects a mate-in-4 whose line promotes (g4g3, g3g2, g2g1=Q, g1g2): a single
 // case that walks every hard part of the streaming path at once — several moves in one
-// breath, a mid-line promotion (the "g1 queen queen g3" segmentation that must not read
+// breath, a mid-line promotion (the "g1 queen queen g2" segmentation that must not read
 // the promotion as the next mover), and a spoken command to finish. Reads whichever
 // puzzle the seed lands on and asserts it really promotes, so a database regeneration
 // that stopped selecting a promotion puzzle fails loudly rather than silently dropping
-// the coverage.
+// the coverage. (Regenerating the database moves the seed — recompute it from the
+// 1200-nearest pool.)
 test("a spoken line streams each move onto the board, then a voice command submits", async ({
   page,
 }) => {
   const errors = collectErrors(page);
   const solutions = solutionsById();
 
-  await pinAndFake(page, 0.95);
+  await pinAndFake(page, 0.52);
   await page.goto("/");
   await expect(page.locator(".board")).toBeVisible();
 
   const { line } = await currentSolution(page, solutions);
   expect(line.length, "the streaming case needs a multi-move line").toBeGreaterThan(1);
-  expect(line.some(hasPromotion), "seed 0.95 must select a puzzle whose line promotes").toBe(true);
+  expect(line.some(hasPromotion), "seed 0.52 must select a puzzle whose line promotes").toBe(true);
 
   const spoken = await spokenLine(page, line);
 
@@ -195,7 +196,7 @@ test("a pause never submits — only an explicit submit does", async ({ page }) 
   const errors = collectErrors(page);
   const solutions = solutionsById();
 
-  await pinAndFake(page, 0.95);
+  await pinAndFake(page, 0.52);
   await page.goto("/");
   await expect(page.locator(".board")).toBeVisible();
 
@@ -239,7 +240,7 @@ test("a pause never submits — only an explicit submit does", async ({ page }) 
 test("the mic arms on load when Speak is the persisted input mode", async ({ page }) => {
   const errors = collectErrors(page);
 
-  await pinAndFake(page, 0.95);
+  await pinAndFake(page, 0.52);
   // Persist the input mode *after* pinAndFake clears storage, so it survives the load.
   await page.addInitScript(() => {
     try {
@@ -268,7 +269,7 @@ test("the mic arms on load when Speak is the persisted input mode", async ({ pag
 test("a spoken submit with nothing drawn does not submit or score", async ({ page }) => {
   const errors = collectErrors(page);
 
-  await pinAndFake(page, 0.95);
+  await pinAndFake(page, 0.52);
   await page.goto("/");
   await expect(page.locator(".board")).toBeVisible();
 

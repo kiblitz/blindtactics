@@ -44,10 +44,17 @@ These were explicitly decided by the user. Do not reopen without asking.
 - **shakmaty + GPL-3.0.** shakmaty is Lichess's own chess library and is
   GPL-3.0-or-later, which forces this project to be GPL-3.0-or-later too. The user
   accepted this tradeoff over a permissive library with weaker SAN/UCI support.
-- **Small database for now.** ~100 puzzles per mate depth (~400 total). Deliberately
-  small so we can iterate on the app first and scale the DB later. The curation tool
-  can regenerate a bigger set on demand.
-- **Mates only.** Mate in 1, 2, 3, 4. No other tactical motifs.
+- **Database: as many as the gates allow, per depth.** 1527 puzzles — 400 each at
+  mate-in-1/2/3 (the `PER_DEPTH` target), and *all* the usable ones at the scarce depths
+  (271 mate-in-4, 56 mate-in-5), which is every roster-≤10 puzzle of those depths in the
+  whole dump. Grew from an earlier deliberately-small 400 (100/depth) when the user asked
+  for "harder and more" puzzles; the curation tool regenerates any size on demand. See "The
+  roster gate" and `blindfold-curate/constants::PER_DEPTH` for why the hard tiers are
+  pool-limited, not policy-limited.
+- **Mates only, mate-in-1 through mate-in-5.** No other tactical motifs. Five, not six:
+  the dump has **zero** roster-≤10 mate-in-6 candidates (measured — they need too much
+  material to fit a 10-square roster), so `MAX_DEPTH` is 5. Deeper was rejected by data,
+  not preference; see `blindfold_core::constants::MAX_DEPTH`.
 - **Leptos CSR, all-Rust, static site.** Decided by the AI when the user deferred
   ("do whatever you think is best"), on this reasoning: the user asked for "a web app
   written in Rust"; the app has no backend needs (no accounts, no persistence, no shared
@@ -133,8 +140,10 @@ Therefore the `mateInN` theme tag is used **only as a cheap prefilter** to shrin
 candidate pool. Every surviving puzzle is then re-proved from scratch by our own solver.
 
 Approximate pool sizes (sampled, ±1pp — no per-theme stats are published):
-`mateIn1` ~845k, `mateIn2` ~824k, `mateIn3` ~162k, `mateIn4` ~32k. Mate-in-4 is the tight
-one; everything else has room to filter hard.
+`mateIn1` ~845k, `mateIn2` ~824k, `mateIn3` ~162k, `mateIn4` ~32k, `mateIn5` ~few-k. After
+the roster-≤10 and clock gates and re-proving, the *usable* counts are the ones that bind:
+271 mate-in-4 and 56 mate-in-5 in the entire dump (`mateIn6`: zero at roster ≤10). Mate-in-5
+is the tight tier now; the shallower ones filter hard and hit the `PER_DEPTH` target.
 
 ## Architecture
 
@@ -149,12 +158,12 @@ blindfold-chess-trainer/
 
 ### Current status
 
-- `blindfold-core` — built, 123 tests, clippy clean.
+- `blindfold-core` — built, 162 tests, clippy clean.
 - `blindfold-curate` — built, 37 tests + 1 `#[ignore]`d. Streams the dump, gates on
   roster size and the halfmove clock, re-proves every candidate, writes
   `database/*.jsonl`. The ignored one needs the 300 MB dump:
   `BLINDFOLD_DUMP=<path> cargo test -p blindfold-curate -- --ignored`.
-- `blindfold-web` — built, 91 tests (+ Playwright across two projects, run as 14 cases —
+- `blindfold-web` — built, 92 tests (+ Playwright across two projects, run as 14 cases —
   the reveal test runs on two pinned puzzles, a `voice` spec drives a fake recogniser over
   four cases, a screen-wake-lock test drives a faked `navigator.wakeLock`, and a `mobile`
   project runs a touch spec on a phone viewport), clippy clean. Blank board,
@@ -193,8 +202,10 @@ forward. None of these errors ever changed any code; every one was a figure set 
 settled and obeyed. So the only trustworthy count is the one you just measured. The status
 block above was measured at the time of writing and will drift with the next commit —
 re-measure, do not quote it.
-- `database/` — **400 puzzles, 100 per depth**, curated from the 2026-07-05 dump and
-  committed. Rosters run 4-10 squares, median 9. Every one is re-proved by
+- `database/` — **1527 puzzles: 400 / 400 / 400 / 271 / 56** for mate-in-1..5, curated
+  from the 2026-07-05 dump (still 6,057,357 lines) and committed. The abundant depths hit
+  the `PER_DEPTH` = 400 target; the scarce ones ship every usable puzzle in the dump (271
+  mate-in-4, 56 mate-in-5). Rosters run 4-10 squares, median 9. Every one is re-proved by
   `crates/blindfold-curate/tests/database.rs`.
 - CI — `.github/workflows/ci.yml`, on every push and PR. A `check` job runs
   `fmt --check`, clippy (native and wasm, `-D warnings`), and `cargo test --workspace`;
@@ -1097,15 +1108,18 @@ mate-in-4 is `7k/5K2/8/6P1/8/8/3p4/8`, four pieces and a pawn race.
 **Why 10.** Measured over the whole dump — every `mateInN` row converted, clock-gated
 and re-proved — rather than argued. Verified survivors by gate:
 
-| gate | mate-in-1 | mate-in-2 | mate-in-3 | mate-in-4 |
-|---|---|---|---|---|
-| ≤8 | 21,855 | 14,461 | 1,384 | **131** |
-| ≤10 | 45,510 | 34,275 | 3,450 | **271** |
-| ≤14 | 157,258 | 161,399 | 17,812 | **1,242** |
+| gate | mate-in-1 | mate-in-2 | mate-in-3 | mate-in-4 | mate-in-5 |
+|---|---|---|---|---|---|
+| ≤8 | 21,855 | 14,461 | 1,384 | **131** | ? |
+| ≤10 | 45,510 | 34,275 | 3,450 | **271** | **56** |
+| ≤14 | 157,258 | 161,399 | 17,812 | **1,242** | ? |
 
-Mate-in-4 binds; 271 is 2.7x the 100 we keep, which is enough for `select` to choose.
-At 8 it is 131 — a 76% keep rate, i.e. `select` rounding down again — and below 8 the
-tier empties.
+At ≤10, mate-in-5 is now the binding tier at **56** — every roster-≤10 mate-in-5 in the
+dump — and mate-in-6 has **zero** candidates at any gate, which is why `MAX_DEPTH` is 5.
+We keep all 56 mate-in-5 and all 271 mate-in-4; the scarce tiers are pool-limited, so a
+looser gate would only pull in heavier rosters, not more hard puzzles. The abundant tiers
+(1-3) keep the `PER_DEPTH` = 400 target. Below 8 the mate-in-4 tier is already thinning
+(131), and mate-in-5 thinner still.
 
 **This section previously said 14, on the grounds that "a gate near 10 is simply not
 reachable at 100/depth for mate-in-4".** That was asserted and never measured, and it
@@ -1159,24 +1173,34 @@ paragraph has now been wrong about them twice, each time by reaching for the ari
 before the rule:
 
 - The **automatic** draw (halfmove 150) is genuinely unreachable. Lichess auto-draws at the
-  50-move rule, so source clocks cap near 99, and a mate-in-4 is ≤7 plies: 99 + 7 = 106.
-- The **claimable** draw (halfmove 100) is reachable, from a source clock of **94** or more,
-  with every ply quiet — a pawn move or capture zeroes the clock.
+  50-move rule, so source clocks cap near 99, and a mate-in-5 is ≤9 plies: 99 + 9 = 108.
+- The **claimable** draw (halfmove 100) is reachable, with every ply quiet — a pawn move or
+  capture zeroes the clock. From what source clock depends on the depth (below).
 
-**Why 94 and not 93.** `93 + 7 = 100` is the tempting sum and it is the wrong one: it counts
-the clock *reaching* 100, but ply 7 is the *solver's mating move*, and mate ends the game
-(FIDE 5.1.1) while a 50-move draw must be **claimed by the player having the move** (FIDE
-9.3). The defender only has the move at plies 2, 4 and 6 — clocks `C+1`, `C+3`, `C+5` — so the
-binding ply is their last turn, not the mate. From `C = 93` the defender is on move at 94, 96,
-98 and can claim nothing, while the mate lands exactly on 100. From `C = 94` they reach 99 and
-may declare a move making it 100, which is claimable under 9.3(a). (9.3(b), where the clock is
-already at 100 on their turn, needs `C = 95`.)
+**Why the threshold is depth-aware, and is `102 − 2·depth`.** `C + plies = 100` is the
+tempting sum and it is the wrong one: it counts the clock *reaching* 100, but the last ply is
+the *solver's mating move*, and mate ends the game (FIDE 5.1.1) while a 50-move draw must be
+**claimed by the player having the move** (FIDE 9.3). The defender's *last* move is at ply
+`2(depth−1)`, at clock `C + 2·depth − 3` — that is the binding ply, not the mate. It becomes
+claimable under 9.3(a) (declare a move making it 100) once that clock reaches 99, i.e. once
+`C ≥ 101 − 2·depth`. So reject at `C = 102 − 2·depth`:
 
-So: rare, not impossible — and a mate the defender can simply decline to lose is not a mate.
+| depth | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| reject-at clock | 100 | 98 | 96 | 94 | 92 |
 
-Cheap to close: have the curation tool reject candidates whose halfmove clock is high enough
-to matter. Do it there rather than in `judge`, which must stay a pure function of the four
-things the roster carries — see the `to_fen` note about `Chess::eq` ignoring the clocks.
+A deeper mate climbs the clock higher by the defender's last turn, so it needs a **stricter**
+gate. Mate-in-4's value is 94 — the single value this gate used before mate-in-5 was added —
+and mate-in-5 needs 92; applying 94 uniformly would be too loose for the deepest tier. (Depth
+1 has no defender move at all, so 100 there is a conservative guard against the 75-move *auto*
+draw, not a claim.) So: rare, not impossible — and a mate the defender can simply decline to
+lose is not a mate.
+
+Closed in the curation tool: `constants::max_halfmove_clock(depth)` rejects candidates whose
+shown-position clock is high enough to matter, per depth. Done there rather than in `judge`,
+which must stay a pure function of the four things the roster carries — see the `to_fen` note
+about `Chess::eq` ignoring the clocks. In practice moot for the committed set (the deepest
+clock is 58, at mate-in-1), but the gate must be correct for the depths we ship.
 
 ### Why arrows, not `shakmaty::Move`s
 
@@ -1249,6 +1273,12 @@ measured, not guessed:
 - `min_depth(pos, 4)`: ~1 second per position. The **deepest iteration is ~97% of the
   cost**, which is why `verify` searches `depth - 1` and not `depth` — `judge` has already
   proved a mate at `depth`, so searching it again is pure waste (measured 42x).
+- **Verifying a mate-in-5 is no more expensive than a mate-in-4.** `verify` proves
+  minimality by searching `depth − 1`, so a mate-in-5 searches to depth 4 (~1 s) — the same
+  cost — and the extra `judge` ply is microseconds. This is why regenerating the full
+  1527-puzzle database (all five depths, ~16k candidate verifications across 16 cores) runs
+  in seconds. Roster-≤10 positions have few pieces, so their searches are far below the
+  bare-king worst case below.
 - `min_depth(pos, 8)` on **two bare kings** does not finish. Depth is therefore clamped to
   `constants::MAX_DEPTH` before any search, because `Puzzle::depth` arrives from untrusted
   JSON.
@@ -1262,15 +1292,20 @@ measured, not guessed:
   doc if you touch the bound, `Branch`, or the frontier advance. Headroom here is free; wasm
   linear memory never shrinks back, so overshoot is not.
 - **`1 << 18` does not reject legitimate work — do not "restore" it on a hunch.** Keep the
-  two halves of the argument apart; an earlier draft ran them together and overclaimed.
-  *Proven:* only three plies of a solution generate a frontier (the last arrow is `is_last`
-  and pushes nothing; `MAX_DEPTH` is 4), and growth on `UNBOUNDED_FRONTIER` is
-  `[30, 926, 29203, 933297, ...]`, so tripping the bound needs **5+ arrows** and no solution
-  has them. *Empirical:* the third column's worst case is a measurement — sweeping the
-  immune shape (black light-squared bishops vs an all-dark mating line) gives **63,308**,
-  about 4x clear. *And it fails safe either way:* exceeding the bound is `TooComplex`, not
-  `Refuted`, so no user is told they were wrong; `verify` demands `Mates`, so such a puzzle
-  never reaches the database, so the app is never asked to judge one. That only holds while
+  three parts of the argument apart; an earlier draft ran them together and overclaimed (and
+  `MAX_DEPTH` is now 5, which retires the old blanket "no solution has 5 arrows" claim — read
+  the `MAX_FRONTIER` doc in `blindfold_core::constants`, which is the authority). *Proven for
+  ≤ mate-in-4:* a solution's advancing plies generate the frontier (the last arrow is
+  `is_last` and pushes nothing), and growth on `UNBOUNDED_FRONTIER` is
+  `[30, 926, 29203, 933297, ...]`; a mate-in-1..4 has ≤3 advancing plies, topping out at
+  29,203 — an eighth of the bound. *Measured for mate-in-5:* a 5-arrow solution has 4
+  advancing plies, whose unbounded column (933,297) is past the bound — so depth 5 is covered
+  by measurement, not proof: all 56 roster-≤10 mate-in-5 verify under this bound, and raising
+  it 16x to `1 << 22` admits **exactly zero** more (both curate 56), because a ≤10-square
+  roster cannot branch as wide as the pathological many-piece fixture. *And it fails safe
+  either way:* exceeding the bound is `TooComplex`, not `Refuted`, so no user is told they
+  were wrong; `verify` demands `Mates`, so such a puzzle never reaches the database (we would
+  just curate fewer than 56), so the app is never asked to judge one. That only holds while
   curation and the app read the **same** constant.
 
 Prunings deliberately NOT added, with reasons:
@@ -1364,14 +1399,18 @@ actually linear. Sampled from ~59k real puzzles pulled from the live dump:
 | mateIn2 | 824k | 93.8% | 773k |
 | mateIn3 | 162k | 61.4% | 99k |
 | mateIn4 | 32k | 34.8% | 11k |
+| mateIn5 | ~few-k | ~lower | — |
 
 \* Not a measurement. A mate-in-1 is linear by construction — the solver's single arrow is
 the first ply, so no defense precedes it and there is nothing to branch. It cannot drift.
-The other three are sample estimates; treat mateIn4 in particular as "about a third", not
-as 34.8%.
+The rest are sample estimates; treat mateIn4 as "about a third", not as 34.8%.
 
-This retires the one risk that could have invalidated the whole design: mate-in-4 is the
-tight tier, and ~11k usable puzzles against a target of ~100 is ample.
+Note the difference between *linear over the whole pool* (this table) and *usable at roster
+≤10* (the roster-gate table). Linearity is not the binding constraint for the deep tiers —
+the **roster gate** is: mate-in-5 yields only 56 usable puzzles not because few are linear but
+because few roster-≤10 mate-in-5 positions exist at all (147 candidates in the whole dump, 56
+of them linear). That is why the depth ceiling is 5, and why mate-in-4/5 ship their entire
+usable pool rather than a `PER_DEPTH` sample.
 
 ## Working agreements with the user
 

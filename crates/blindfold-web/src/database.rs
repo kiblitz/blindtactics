@@ -19,11 +19,12 @@
 use blindfold_core::puzzle;
 
 /// The database, in depth order, exactly as committed.
-const FILES: [&str; 4] = [
+const FILES: [&str; 5] = [
     include_str!("../../../database/mate_in_1.jsonl"),
     include_str!("../../../database/mate_in_2.jsonl"),
     include_str!("../../../database/mate_in_3.jsonl"),
     include_str!("../../../database/mate_in_4.jsonl"),
+    include_str!("../../../database/mate_in_5.jsonl"),
 ];
 
 /// Every puzzle, in depth order.

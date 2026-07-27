@@ -12,15 +12,37 @@ pub const MATE_THEME_HINT: &str = blindfold_core::constants::LICHESS_MATE_THEME_
 /// Mate depths we curate, and the order the database files are written in.
 ///
 /// The length is tied to core's ceiling: `Puzzle::verify` rejects anything deeper
-/// than `MAX_DEPTH`, so a fifth entry here would produce a tier where every puzzle
-/// fails verification and the file comes out empty. Better a compile error.
-pub const DEPTHS: [usize; blindfold_core::constants::MAX_DEPTH] = [1, 2, 3, 4];
+/// than `MAX_DEPTH`, so a sixth entry here would produce a tier where every puzzle
+/// fails verification and the file comes out empty. Better a compile error. (And it
+/// *would* be empty: the dump has zero roster-≤10 mate-in-6 candidates — see
+/// `MAX_DEPTH`'s doc.)
+pub const DEPTHS: [usize; blindfold_core::constants::MAX_DEPTH] = [1, 2, 3, 4, 5];
 
-/// How many verified puzzles to keep per depth.
+/// How many verified puzzles to keep per depth — a *target ceiling*, not a promise.
 ///
-/// Deliberately small: the app is what we want to iterate on, and the database can
-/// be regenerated at any size by re-running this.
-pub const PER_DEPTH: usize = 100;
+/// The abundant tiers (mate-in-1, -2, -3) hit it exactly; the scarce tiers ship all they
+/// have, which is fewer. Measured over the whole dump at [`MAX_ROSTER_SQUARES`], the usable
+/// pool is ~6000+ / 5772 / 3137 / **271** / **56** for depths 1-5, so mate-in-4 keeps 271
+/// and mate-in-5 keeps 56 no matter how high this is set — [`select::by_rating_spread`](
+/// crate::select::by_rating_spread) returns everything when the pool is smaller than the
+/// target. So this constant governs only depths 1-3; the hard tiers are pool-limited.
+///
+/// 400 (up from an earlier 100) because "more puzzles" was the ask and the cost is trivial:
+/// verification is ~13 ms per mate-in-4 and `run` parallelizes it, so the whole regeneration
+/// is seconds, and 400 × ~115 bytes per tier is a few tens of KiB in the wasm bundle. The
+/// even rating spread means a larger target simply samples the hard end more densely too —
+/// no separate "hard bias" is needed, and none is wanted, because the app draws puzzles near
+/// the user's Elo and so must keep the easy end for weak users as much as the hard end for
+/// strong ones.
+pub const PER_DEPTH: usize = 400;
+
+/// The fewest puzzles a depth's file may hold before a regeneration is considered broken.
+///
+/// A floor, not a target: the abundant tiers land on [`PER_DEPTH`] and the scarce ones on
+/// their whole verified pool (271, 56), so this only fires if a tier *collapses* — a gate
+/// bug, a truncated dump, a bad merge. Set below the thinnest real tier (mate-in-5's 56) with
+/// margin. `tests/database.rs` asserts every file lands in `[MIN_PER_DEPTH, PER_DEPTH]`.
+pub const MIN_PER_DEPTH: usize = 50;
 
 /// How many candidates to gather per depth before verifying.
 ///
@@ -52,15 +74,18 @@ pub const CANDIDATES_PER_DEPTH: usize = 6_000;
 /// `mateInN` row converted, clock-gated, and re-proved. Verified survivors by gate:
 ///
 /// ```text
-/// gate  mate-in-1  mate-in-2  mate-in-3  mate-in-4   (need PER_DEPTH = 100)
-///  <=8     21,855     14,461      1,384        131
-///  <=10    45,510     34,275      3,450        271
-///  <=14   157,258    161,399     17,812      1,242
+/// gate  mate-in-1  mate-in-2  mate-in-3  mate-in-4  mate-in-5
+///  <=8     21,855     14,461      1,384        131         ?
+///  <=10    45,510     34,275      3,450        271        56
+///  <=14   157,258    161,399     17,812      1,242         ?
 /// ```
 ///
-/// Mate-in-4 is the binding tier, and 271 is 2.7x what we keep — enough for `select`
-/// to actually choose. At 8 it is 131, a 76% keep rate, which is `select` rounding
-/// down again. Below 8 the tier empties.
+/// Mate-in-5 is now the binding tier at 56 (mate-in-6 has *zero* candidates at any of
+/// these gates, which is why the depth ceiling is 5). We keep all 56, and all 271
+/// mate-in-4 — the scarce tiers are pool-limited, not gate-limited, so relaxing this
+/// would only pull in heavier rosters, not more hard puzzles. At ≤10 the median roster
+/// is 9. Do not raise it without re-running the numbers; a looser gate costs the user
+/// a position they cannot hold in their head, for no gain at the depths that matter.
 ///
 /// An earlier draft of this constant was 14 and said a gate near 10 was "simply not
 /// reachable at `PER_DEPTH` for mate-in-4". That was asserted, never measured, and it
@@ -70,25 +95,37 @@ pub const CANDIDATES_PER_DEPTH: usize = 6_000;
 /// `each_puzzle_fits_in_a_head` in `tests/database.rs` is what holds it.
 pub const MAX_ROSTER_SQUARES: usize = 10;
 
-/// Reject a candidate whose halfmove clock is this high or higher.
+/// Reject a candidate at depth `depth` whose halfmove clock is this high or higher.
 ///
-/// Measured on the position the user is **shown** — the one after the row's setup
-/// move — not on the row's FEN, which is a ply earlier and whose clock is therefore
-/// one lower for a quiet setup move. That is the `C` in CLAUDE.md's derivation: the
-/// clock at ply 0 of what the solver actually faces.
+/// **Depth-aware, and it has to be.** shakmaty implements no 50-move rule, so our solver
+/// cannot see a draw the defender could *claim*. The clock climbs one per ply, so a deeper
+/// mate lets the defender reach a higher clock on their last turn before the mate — a
+/// deeper mate needs a *stricter* gate. Measured on the position the user is **shown** (the
+/// one after the row's setup move), whose clock is the `C` in CLAUDE.md's derivation.
 ///
-/// shakmaty implements no 50-move rule, so our solver cannot see a draw the defender
-/// could claim. From `C = 94`, an all-quiet mate-in-4 lets the defender reach 99 and
-/// declare a move making it 100 — claimable under FIDE 9.3(a) — on their last turn
-/// before the mate. A mate the defender can simply decline to lose is not a mate.
+/// The binding ply is the defender's *last* move, at ply `2(depth-1)`, whose clock is
+/// `C + 2·depth − 3`. It is claimable under FIDE 9.3(a) once that reaches 99 (declare a
+/// move making it 100), so the mate stays real only while `C + 2·depth − 3 ≤ 98`, i.e.
+/// `C ≤ 101 − 2·depth`. Reject at `102 − 2·depth`:
 ///
-/// 94 is derived in CLAUDE.md and it is **not** `100 - 7`: the mating ply is the
-/// solver's, and mate ends the game (FIDE 5.1.1), so the binding ply is the
-/// defender's last turn, not the mate. Read the derivation before touching this.
+/// ```text
+/// depth   1    2    3    4    5
+/// gate  100   98   96   94   92
+/// ```
+///
+/// It is **not** `100 − plies`: the mating ply is the solver's, and mate ends the game
+/// (FIDE 5.1.1), so the binding ply is the defender's last turn, not the mate. Depth 4's
+/// 94 is the value this was before mate-in-5 was added; 5 needs 92, and applying 94 to it
+/// would be too loose. (In practice moot — the deepest committed clock is 58, at mate-in-1
+/// — but the gate must be correct for the depth we ship, not the depth we used to.) Read
+/// the derivation in CLAUDE.md before touching this.
 ///
 /// It lives in curation rather than in `judge`, which must stay a pure function of
-/// exactly the four things the roster carries.
-pub const MAX_HALFMOVE_CLOCK: u32 = 94;
+/// exactly the four things the roster carries. A `const fn` so it stays a compile-time
+/// policy value, one per depth.
+pub const fn max_halfmove_clock(depth: usize) -> u32 {
+    (102 - 2 * depth) as u32
+}
 
 /// The narrowest rating range a depth's file may span before we call the spread
 /// broken.

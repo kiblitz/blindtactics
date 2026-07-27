@@ -52,10 +52,10 @@ fn picks_are_spread_across_the_range_not_clustered() {
     assert_eq!(kept, [1000, 1025, 1050, 1075, 1099]);
 }
 
-/// The count is load-bearing: `every_depth_has_a_full_set` in the database test
-/// asserts exactly `PER_DEPTH`, so an off-by-one in the spacing arithmetic — two
-/// indices colliding and yielding `want - 1` puzzles — would surface as a confusing
-/// database failure rather than here.
+/// The count is load-bearing: `every_depth_is_within_its_target_band` in the database
+/// test caps each abundant tier at exactly `PER_DEPTH`, so an off-by-one in the spacing
+/// arithmetic — two indices colliding and yielding `want - 1` puzzles — would surface as a
+/// confusing database failure rather than here.
 #[test]
 fn returns_exactly_what_was_asked_for() {
     for len in 1..60usize {

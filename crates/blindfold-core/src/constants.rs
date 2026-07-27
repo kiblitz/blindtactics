@@ -78,10 +78,17 @@ pub const ROSTER_SQUARE_SEP: &str = ", ";
 
 /// The deepest mate this trainer deals in.
 ///
-/// Puzzles are mate-in-1 through mate-in-4. This is a real ceiling, not a
+/// Puzzles are mate-in-1 through mate-in-5. This is a real ceiling, not a
 /// preference: the linearity search costs roughly 30x per extra ply, so an
 /// unbounded depth is indistinguishable from a hang.
-pub const MAX_DEPTH: usize = 4;
+///
+/// **5 rather than 6 is measured, not chosen.** Curation converts, clock-gates and
+/// re-proves every `mateInN` row in the whole dump; at [`crate::constants`]' roster
+/// gate there are **zero** mate-in-6 candidates (they need too much material to fit a
+/// 10-square roster) and only 56 mate-in-5. Six would be an always-empty tier. See the
+/// "Where things live" numbers in CLAUDE.md before raising this — and note that a sixth
+/// ply would also break the [`MAX_FRONTIER`] argument below in a way five does not.
+pub const MAX_DEPTH: usize = 5;
 
 /// The longest submitted line worth judging.
 ///
@@ -109,37 +116,45 @@ pub const MAX_LINE: usize = 8;
 /// `1 << 18` measures at **97 MB** peak working set (`examples/frontier_memory.rs`,
 /// on the `UNBOUNDED_FRONTIER` fixture) against a 40 MB flat frontier.
 ///
-/// Why it does not reject legitimate work. Two arguments, and it matters which is
-/// which — an earlier version of this doc ran them together and overclaimed.
+/// Why it does not reject legitimate work. The argument is in three parts now, and it
+/// matters which is which — an earlier version ran the first two together and overclaimed.
 ///
-/// **Proven, for a solution.** Only three plies of a *solution* ever generate a
-/// frontier: the last arrow is `is_last`, so `judge` returns without pushing, and
-/// [`MAX_DEPTH`] = 4 leaves three advancing plies. Measured growth on
-/// `UNBOUNDED_FRONTIER` (no defense ever refutes it, so nothing prunes) is
-/// `[30, 926, 29203, 933297, ...]`, ~32x per ply. Reaching the bound takes **five
-/// or more arrows**, and no solution has them.
+/// **Proven, for a solution up to mate-in-4.** Only the *advancing* plies of a solution
+/// generate a frontier: the last arrow is `is_last`, so `judge` returns without pushing.
+/// Measured growth on `UNBOUNDED_FRONTIER` (no defense ever refutes it, so nothing prunes)
+/// is `[30, 926, 29203, 933297, ...]`, ~32x per ply. A mate-in-1..4 has at most three
+/// advancing plies, topping out at 29,203 — under an eighth of the bound — so no such
+/// solution can reach it.
 ///
-/// Note the scope. `judge` itself bounds submissions by [`MAX_LINE`] = 8, not by
-/// [`MAX_DEPTH`], so a *user* may draw 5-8 arrows and build four columns or more —
+/// **Measured, for mate-in-5.** [`MAX_DEPTH`] is 5, so a five-arrow solution has *four*
+/// advancing plies, and the unbounded fourth column above is 933,297 — past the bound.
+/// Depth 5 is therefore *not* covered by the proof; it is covered by measurement. Curating
+/// the whole dump, all 56 roster-≤10 mate-in-5 puzzles verify — each one's correct line
+/// keeps its frontier under this bound — and raising the bound 16x to `1 << 22` admits
+/// **exactly zero** more (both runs curate 56). The unbounded 933k is a pathological
+/// many-piece fixture; a ≤10-square roster cannot branch that wide. So the bound does not
+/// limit mate-in-5 — linearity does.
+///
+/// Note the scope of the over-long case. `judge` bounds submissions by [`MAX_LINE`] = 8,
+/// not [`MAX_DEPTH`], so a *user* may draw 5-8 arrows and build four columns or more —
 /// `examples/frontier_memory.rs` does exactly that on purpose. That is the case the
-/// bound exists for, and it is covered by the fail-safe paragraph below, not by
-/// this one.
+/// fail-safe paragraph below exists for, not the paragraphs above.
 ///
-/// **Empirical.** What remains is the third column, and that is a measurement, not
-/// a theorem. Sweeping the one shape immune to the usual self-correction — black
-/// light-squared bishops against an all-dark mating line, so they can never capture
+/// **Empirical worst case.** What remains is the widest *constructed* frontier, a
+/// measurement not a theorem. Sweeping the one shape immune to the usual self-correction —
+/// black light-squared bishops against an all-dark mating line, so they can never capture
 /// the mating piece or interpose — the widest third-ply frontier found is **63,308**
 /// (8 bishops, absurd material), about **4x** clear of the bound. That is the worst
 /// *constructed*, not the worst *possible*. Sustaining ~30x per ply normally needs
 /// long-range defenders, and long-range is exactly what lets them refute the line
 /// and collapse the frontier, which is why this is hard to push higher.
 ///
-/// **And if the empirical part is ever wrong, nothing breaks.** Exceeding the bound
-/// yields [`crate::mate::Verdict::TooComplex`], which is not a refutation — the user
-/// is never told they were wrong. Curation calls the same `judge` under the same
-/// constant, and `verify` demands `Mates`, so a puzzle that trips this bound fails
-/// verification and never reaches the database. The app is therefore never asked to
-/// judge one. That shared constant is the whole safety property, and it is why both
-/// crates must read it from here rather than pick their own. (Neither exists yet;
-/// this is the intent they are to be built to.)
+/// **And if any of that is ever wrong, nothing breaks.** Exceeding the bound yields
+/// [`crate::mate::Verdict::TooComplex`], which is not a refutation — the user is never
+/// told they were wrong. Curation calls the same `judge` under the same constant, and
+/// `verify` demands `Mates`, so a puzzle that trips this bound fails verification and never
+/// reaches the database (we would simply curate fewer than 56 mate-in-5). The app is
+/// therefore never asked to judge one. That shared constant is the whole safety property,
+/// and it is why `blindfold-curate` and `blindfold-web` must both read it from here rather
+/// than pick their own.
 pub const MAX_FRONTIER: usize = 1 << 18;
